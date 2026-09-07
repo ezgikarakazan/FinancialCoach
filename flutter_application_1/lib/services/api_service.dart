@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 class ApiService {
   static const String baseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'http://localhost:8000',
+    defaultValue: 'http://127.0.0.1:8000',
   );
 
   static String? _token;
@@ -232,9 +232,7 @@ class ApiService {
       return jsonDecode(response.body) as Map<String, dynamic>;
     }
 
-    throw Exception(
-      "PDF yüklenemedi: ${response.statusCode} - ${response.body}",
-    );
+    throw Exception("PDF yüklenemedi: ${_extractError(response)}");
   }
 
   static Future<Map<String, dynamic>> getAnalytics() async {
@@ -307,6 +305,7 @@ class ApiService {
     required int itemId,
     required String status,
     String? title,
+    String? description,
     String? category,
     String? sourceType,
   }) async {
@@ -315,9 +314,10 @@ class ApiService {
       headers: _currentAuthHeaders(),
       body: jsonEncode({
         "status": status,
-        if (title != null) "title": title,
-        if (category != null) "category": category,
-        if (sourceType != null) "source_type": sourceType,
+        "title": ?title,
+        "description": ?description,
+        "category": ?category,
+        "source_type": ?sourceType,
       }),
     );
 
@@ -327,4 +327,82 @@ class ApiService {
 
     throw Exception(_extractError(response));
   }
+
+  static Future<List<dynamic>> getPlans() async {
+    final response = await http.get(
+      Uri.parse("$baseUrl/plans"),
+      headers: _currentAuthHeaders(),
+    );
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+    throw Exception(_extractError(response));
+  }
+
+  static Future<Map<String, dynamic>> createPlan({
+    required String name,
+    required String planType,
+    required double targetAmount,
+    required double monthlyAmount,
+    required int totalInstallments,
+    required int paidInstallments,
+    required DateTime startDate,
+    required String notes,
+  }) async {
+    final response = await http.post(
+      Uri.parse("$baseUrl/plans"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({
+        "name": name,
+        "plan_type": planType,
+        "target_amount": targetAmount,
+        "monthly_amount": monthlyAmount,
+        "total_installments": totalInstallments,
+        "paid_installments": paidInstallments,
+        "start_date": _dateOnly(startDate),
+        "notes": notes,
+      }),
+    );
+    if (response.statusCode == 201) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw Exception(_extractError(response));
+  }
+
+  static Future<Map<String, dynamic>> addPlanEntry({
+    required int planId,
+    required String title,
+    required double amount,
+    required DateTime date,
+    required String notes,
+  }) async {
+    final response = await http.post(
+      Uri.parse("$baseUrl/plans/$planId/entries"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({
+        "title": title,
+        "amount": amount,
+        "date": _dateOnly(date),
+        "notes": notes,
+      }),
+    );
+    if (response.statusCode == 201) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+    throw Exception(_extractError(response));
+  }
+
+  static Future<void> deletePlan(int id) async {
+    final response = await http.delete(
+      Uri.parse("$baseUrl/plans/$id"),
+      headers: _currentAuthHeaders(),
+    );
+    if (response.statusCode == 204) return;
+    throw Exception(_extractError(response));
+  }
+
+  static String _dateOnly(DateTime date) =>
+      "${date.year.toString().padLeft(4, '0')}-"
+      "${date.month.toString().padLeft(2, '0')}-"
+      "${date.day.toString().padLeft(2, '0')}";
 }

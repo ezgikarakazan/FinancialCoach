@@ -17,6 +17,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, ConfigDict, EmailStr
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from database import (
@@ -25,12 +26,15 @@ from database import (
     ensure_pdf_upload_statement_type_columns,
     ensure_transaction_source_type_column,
     ensure_transaction_classification_columns,
+    ensure_description_columns,
     ensure_transaction_user_id_column,
     ensure_user_login_security_columns,
+    ensure_user_access_columns,
 )
 from models.transaction import Base, Transaction
 from models.user import User
 from models.pdf_upload import PdfUpload, PdfUploadItem
+from models.plan import Plan, PlanEntry
 
 load_dotenv()
 
@@ -43,9 +47,23 @@ app = FastAPI(
 Base.metadata.create_all(bind=engine)
 ensure_transaction_user_id_column()
 ensure_user_login_security_columns()
+ensure_user_access_columns()
 ensure_transaction_source_type_column()
 ensure_transaction_classification_columns()
+ensure_description_columns()
 ensure_pdf_upload_statement_type_columns()
+
+configured_admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
+if configured_admin_email:
+    with SessionLocal() as startup_db:
+        configured_admin = (
+            startup_db.query(User)
+            .filter(User.email == configured_admin_email)
+            .first()
+        )
+        if configured_admin is not None and configured_admin.role != "admin":
+            configured_admin.role = "admin"
+            startup_db.commit()
 
 app.add_middleware(
     CORSMiddleware,
@@ -154,6 +172,7 @@ class TransactionCreate(BaseModel):
 class TransactionOut(BaseModel):
     id: int
     title: str
+    description: str = ""
     amount: Decimal
     category: str
     date: date
@@ -175,10 +194,31 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PlanCreate(BaseModel):
+    name: str
+    plan_type: str
+    target_amount: Decimal = Decimal("0")
+    monthly_amount: Decimal = Decimal("0")
+    total_installments: int = 0
+    paid_installments: int = 0
+    start_date: date
+    notes: str = ""
+
+
+class PlanEntryCreate(BaseModel):
+    title: str
+    amount: Decimal
+    date: date
+    notes: str = ""
+
+
 class UserAuthOut(BaseModel):
     id: int
     name: str
     email: str
+    role: str
+    subscription_type: str
+    subscription_expires_at: datetime | None = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -193,6 +233,7 @@ class PdfUploadItemOut(BaseModel):
     id: int
     date: date
     title: str
+    description: str = ""
     amount: Decimal
     category: str
     source_type: str
@@ -224,6 +265,7 @@ class PdfUploadDetail(BaseModel):
 class PdfUploadItemDecision(BaseModel):
     status: str
     title: str | None = None
+    description: str | None = None
     category: str | None = None
     source_type: str | None = None
 
@@ -244,7 +286,7 @@ def _normalize_transaction_type(value: str | None, title: str, amount: float) ->
     label = (title or "").lower()
     if any(keyword in label for keyword in ("kredi kartı ödemesi", "kredi karti odemesi", "kredi kartı ödeme", "kredi karti odeme")):
         return "credit_card_payment"
-    if any(keyword in label for keyword in ("giden transfer", "havale", "eft", "virman")):
+    if any(keyword in label for keyword in ("virman", "hesaplar arası transfer", "hesaplar arasi transfer")):
         return "transfer"
     if amount > 0:
         return "income"
@@ -365,6 +407,7 @@ def _parse_statement_amount(amount_raw: str) -> float | None:
     if not cleaned:
         return None
 
+    cleaned = cleaned.replace("−", "-")
     cleaned = cleaned.replace("TL", "").replace("TRY", "")
     cleaned = cleaned.replace("USD", "").replace("EUR", "").replace("GBP", "")
     cleaned = cleaned.replace("₺", "").replace(" ", "")
@@ -435,6 +478,22 @@ def _is_summary_like_transaction(title: str, amount: float | None = None) -> boo
     return False
 
 
+def _is_statement_notice(title: str) -> bool:
+    """Ekstre altındaki ücret ve bilgilendirme metinlerini işlemden ayırır."""
+    cleaned = " ".join((title or "").split()).strip().lower()
+    notice_keywords = (
+        "şans oyunu",
+        "sans oyunu",
+        "işlem başına",
+        "islem basina",
+        "ücretsiz olarak",
+        "ucretsiz olarak",
+        "bsmv dahil",
+        "tarihinden itibaren",
+    )
+    return any(keyword in cleaned for keyword in notice_keywords)
+
+
 def _build_transaction(tx_date: date, title: str, amount: float) -> dict[str, Any]:
     normalized_title = " ".join((title or "").split()).strip()
     # OCR gürültüsünden kalan 1-2 karakterlik anlamsız parçalar ("we", "sd" gibi)
@@ -458,7 +517,7 @@ def parse_transactions_from_text(text: str) -> List[dict[str, Any]]:
         if not line:
             continue
 
-        tokens = line.split()
+        tokens = _merge_signed_amount_tokens(line.split())
         if len(tokens) < 3:
             continue
 
@@ -480,12 +539,14 @@ def parse_transactions_from_text(text: str) -> List[dict[str, Any]]:
             continue
 
         title_tokens = tokens[1:amount_idx]
+        if not title_tokens:
+            title_tokens = tokens[amount_idx + 1:]
         title = " ".join(title_tokens).strip()
         if not title:
             title = "Ekstre İşlemi"
 
         item = _build_transaction(tx_date, title, amount_value)
-        if _is_summary_like_transaction(item["title"], item["amount"]):
+        if _is_summary_like_transaction(item["title"], item["amount"]) or _is_statement_notice(item["title"]):
             continue
 
         key = (item["date"], item["title"], item["amount"])
@@ -497,7 +558,7 @@ def parse_transactions_from_text(text: str) -> List[dict[str, Any]]:
     return results
 
 
-_AMOUNT_RE = re.compile(r'^[\-+]?\d{1,3}(?:[.,]\d{3})*(?:[.,]\d{2})$')
+_AMOUNT_RE = re.compile(r'^[\-+]?\d+(?:[.,]\d{3})*(?:[.,]\d{2})$')
 _DATE_RE = re.compile(r'^\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}$')
 _PURE_DIGITS_RE = re.compile(r'^\d+$')
 _CURRENCY_CODE_RE = re.compile(r'^(TL|TRY|USD|EUR|GBP)$', re.IGNORECASE)
@@ -506,6 +567,24 @@ _CURRENCY_CODE_RE = re.compile(r'^(TL|TRY|USD|EUR|GBP)$', re.IGNORECASE)
 # tüm kelimeleri değil, tutara en yakın son birkaç kelimeyi başlık olarak alıyoruz.
 # Bu, banka/şube adı gibi tutardan uzak sütunların başlığa karışmasını önler.
 _TITLE_TOKEN_LIMIT = 6
+
+
+def _merge_signed_amount_tokens(tokens: list[str]) -> list[str]:
+    merged: list[str] = []
+    index = 0
+    while index < len(tokens):
+        token = tokens[index].replace("−", "-")
+        if (
+            token in {"-", "+"}
+            and index + 1 < len(tokens)
+            and _AMOUNT_RE.match(tokens[index + 1])
+        ):
+            merged.append(f"{token}{tokens[index + 1]}")
+            index += 2
+            continue
+        merged.append(token)
+        index += 1
+    return merged
 
 
 def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dict[str, Any]]:
@@ -521,7 +600,7 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
 
     for row_key in sorted(rows.keys()):
         row_words = sorted(rows[row_key], key=lambda w: w["x0"])
-        texts = [w["text"] for w in row_words]
+        texts = _merge_signed_amount_tokens([w["text"] for w in row_words])
 
         if not texts:
             continue
@@ -543,7 +622,7 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
         # Tarihten sonraki tüm tutarları bul
         amount_indices = [
             i for i, t in enumerate(texts)
-            if i > date_idx and _AMOUNT_RE.match(t)
+            if i > date_idx and _parse_statement_amount(t) is not None
         ]
 
         if not amount_indices:
@@ -555,21 +634,31 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
         if amount is None:
             continue
 
-        # Tarih ile ilk tutar arasındaki kelimeler aday başlık; tutara en yakın
-        # son birkaç tanesi tutulur (açıklama sütunu genelde tutarın hemen solunda)
-        first_amt_idx = amount_indices[0]
+        # Tarih ile seçilen işlem tutarı arasındaki metin açıklama sütunudur.
+        # Bazı bankalar işlem tutarını ve bakiyeyi farklı sütunlarda verir;
+        # bu nedenle yalnızca ilk tutardan önceki kelimelere güvenilmez.
         title_parts = [
             t for i, t in enumerate(texts)
-            if date_idx < i < first_amt_idx
+            if date_idx < i < chosen_idx
             and not _PURE_DIGITS_RE.match(t)
             and not _CURRENCY_CODE_RE.match(t)
+            and _parse_statement_amount(t) is None
         ]
+        if not title_parts:
+            title_parts = [
+                t for i, t in enumerate(texts)
+                if i > date_idx
+                and not _DATE_RE.match(t)
+                and not _PURE_DIGITS_RE.match(t)
+                and not _CURRENCY_CODE_RE.match(t)
+                and _parse_statement_amount(t) is None
+            ]
         if len(title_parts) > _TITLE_TOKEN_LIMIT:
             title_parts = title_parts[-_TITLE_TOKEN_LIMIT:]
         title = " ".join(title_parts).strip() or "Ekstre İşlemi"
 
         item = _build_transaction(tx_date, title, amount)
-        if _is_summary_like_transaction(item["title"], item["amount"]):
+        if _is_summary_like_transaction(item["title"], item["amount"]) or _is_statement_notice(item["title"]):
             continue
         results.append(item)
 
@@ -640,6 +729,12 @@ def _infer_bank_transaction_sign(title: str, amount: float) -> float:
         "gelen transfer",
         "maaş",
         "maas",
+        "maaş ödemesi",
+        "maas odemesi",
+        "ücret ödemesi",
+        "ucret odemesi",
+        "ücret",
+        "ucret",
         "deposit",
         "iade",
         "refund",
@@ -649,11 +744,19 @@ def _infer_bank_transaction_sign(title: str, amount: float) -> float:
         "gelen para",
     ]
 
-    if amount < 0:
-        return amount
-
     has_negative = any(keyword in label for keyword in negative_keywords)
     has_positive = any(keyword in label for keyword in positive_keywords)
+
+    # Ekstreler bazen gelen maaşı eksi sütunda gösterebilir. Açıklama açıkça
+    # gelir belirtiyorsa, bu sinyal işaretten daha güvenilirdir.
+    if has_positive and not any(
+        keyword in label
+        for keyword in ("gider", "harcama", "kredi kartı", "kredi karti")
+    ):
+        return round(abs(amount), 2)
+
+    if amount < 0:
+        return amount
 
     if has_negative and not has_positive:
         return round(-abs(amount), 2)
@@ -730,8 +833,8 @@ def _validate_statement_type(selected_type: str, detected_type: str | None) -> N
     raise HTTPException(
         status_code=400,
         detail=(
-            f"Bu PDF {labels[detected_type]} gibi görünüyor. "
-            f'Lütfen "{labels[detected_type]}" seçeneğini seçip tekrar yükle.'
+            f"Yüklediğin dosya {labels[detected_type]} olarak algılandı. "
+            f"Lütfen yükleme ekranında {labels[detected_type]} seçeneğini seçip tekrar dene."
         ),
     )
 
@@ -838,6 +941,9 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
             "id": user.id,
             "name": user.name,
             "email": user.email,
+            "role": user.role,
+            "subscription_type": user.subscription_type,
+            "subscription_expires_at": user.subscription_expires_at,
         },
     }
 
@@ -881,6 +987,9 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
             "id": user.id,
             "name": user.name,
             "email": user.email,
+            "role": user.role,
+            "subscription_type": user.subscription_type,
+            "subscription_expires_at": user.subscription_expires_at,
         },
     }
 
@@ -888,6 +997,44 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 @app.get("/auth/me", response_model=UserAuthOut)
 def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    if current_user.role != "admin":
+        raise HTTPException(status_code=403, detail="Bu alan yalnızca yöneticilere açıktır")
+    return current_user
+
+
+@app.get("/admin/overview")
+def admin_overview(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_admin_user),
+):
+    user_count = db.query(func.count(User.id)).scalar() or 0
+    premium_count = (
+        db.query(func.count(User.id))
+        .filter(User.subscription_type == "premium")
+        .scalar()
+        or 0
+    )
+    upload_count = db.query(func.count(PdfUpload.id)).scalar() or 0
+    transaction_count = db.query(func.count(Transaction.id)).scalar() or 0
+    plan_count = db.query(func.count(Plan.id)).scalar() or 0
+    pending_pdf_items = (
+        db.query(func.count(PdfUploadItem.id))
+        .filter(PdfUploadItem.status == "pending")
+        .scalar()
+        or 0
+    )
+    return {
+        "users": user_count,
+        "premium_users": premium_count,
+        "free_users": max(user_count - premium_count, 0),
+        "pdf_uploads": upload_count,
+        "transactions": transaction_count,
+        "plans": plan_count,
+        "pending_pdf_items": pending_pdf_items,
+    }
 
 
 @app.get("/dashboard")
@@ -909,7 +1056,7 @@ def dashboard(
     for item in items:
         amount_value = float(item.amount or 0)
 
-        if item.transaction_type in {"transfer", "credit_card_payment"}:
+        if item.transaction_type == "credit_card_payment":
             continue
         if amount_value > 0:
             income += amount_value
@@ -955,11 +1102,46 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
 PDF_MAGIC = b"%PDF-"
 
 
+def _current_analysis_period() -> tuple[date, date]:
+    """İçinde bulunulan ay ve önceki iki ayı kapsayan analiz penceresini döndürür."""
+    today = date.today()
+    start_month = today.month - 2
+    start_year = today.year
+    if start_month <= 0:
+        start_month += 12
+        start_year -= 1
+    return date(start_year, start_month, 1), today
+
+
+def _validate_transaction_dates(transactions: List[dict[str, Any]]) -> None:
+    start_date, end_date = _current_analysis_period()
+    transaction_dates = [
+        date.fromisoformat(item["date"])
+        for item in transactions
+        if item.get("date")
+    ]
+    if not transaction_dates:
+        return
+
+    oldest_date = min(transaction_dates)
+    newest_date = max(transaction_dates)
+    if oldest_date < start_date or newest_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Analiz için yalnızca {start_date.strftime('%d.%m.%Y')} - "
+                f"{end_date.strftime('%d.%m.%Y')} tarihleri arasındaki ekstreler yüklenebilir. "
+                "Daha eski veya ileri tarihli işlemler içeren PDF'yi yükleyemezsin."
+            ),
+        )
+
+
 def _serialize_pdf_item(item: PdfUploadItem) -> dict[str, Any]:
     return {
         "id": item.id,
         "date": item.date.isoformat(),
         "title": item.title,
+        "description": item.description or "",
         "amount": float(item.amount),
         "category": item.category,
         "source_type": item.source_type or "bank",
@@ -1021,12 +1203,27 @@ async def upload_pdf(
             # Aynı içerik daha önce yüklenmiş olabilir. Eski sürümde yanlış türle
             # kaydedilmiş kayıtları düzeltmek için PDF içeriğini yeniden doğrula.
             existing_text = ""
+            refreshed_transactions: List[dict[str, Any]] = []
             try:
                 existing_text = extract_pdf_text(file_path)
                 if not existing_text.strip():
                     existing_text = extract_pdf_text_with_ocr(file_path)
+
+                if existing_text.strip():
+                    refreshed_transactions = parse_transactions_by_words(file_path)
+                else:
+                    refreshed_transactions = parse_transactions_by_ocr_words(file_path)
+                if not refreshed_transactions:
+                    refreshed_transactions = parse_transactions_from_text(existing_text)
+                refreshed_transactions = _normalize_statement_signs(
+                    refreshed_transactions,
+                    statement_type,
+                )
+                _validate_transaction_dates(refreshed_transactions)
+            except HTTPException:
+                raise
             except Exception:
-                existing_text = ""
+                refreshed_transactions = []
             finally:
                 if os.path.exists(file_path):
                     os.remove(file_path)
@@ -1054,6 +1251,30 @@ async def upload_pdf(
                 statement_type,
                 detected_existing_type or existing_upload.statement_type or "bank",
             )
+            stale_notice_items = [
+                item
+                for item in existing_upload.items
+                if item.status == "pending" and _is_statement_notice(item.title)
+            ]
+            for item in stale_notice_items:
+                existing_upload.items.remove(item)
+
+            pending_items = [
+                item for item in existing_upload.items if item.status == "pending"
+            ]
+            for item, refreshed in zip(pending_items, refreshed_transactions):
+                if refreshed.get("title"):
+                    item.title = refreshed["title"]
+                item.amount = refreshed["amount"]
+                item.date = date.fromisoformat(refreshed["date"])
+                item.category = refreshed["category"]
+                item.transaction_type = _normalize_transaction_type(
+                    None,
+                    item.title,
+                    float(item.amount),
+                )
+            if stale_notice_items or (pending_items and refreshed_transactions):
+                db.commit()
             items = [_serialize_pdf_item(item) for item in existing_upload.items]
             return {
                 "success": True,
@@ -1107,6 +1328,7 @@ async def upload_pdf(
 
         _validate_statement_type(statement_type, _detect_statement_type(text))
         parsed_transactions = _normalize_statement_signs(parsed_transactions, statement_type)
+        _validate_transaction_dates(parsed_transactions)
         detected_institution = _detect_institution_name(text, institution_name)
 
         upload = PdfUpload(
@@ -1247,6 +1469,10 @@ def decide_pdf_upload_item(
                 item.title = payload.title.strip()
                 if linked_transaction is not None:
                     linked_transaction.title = item.title
+            if payload.description is not None:
+                item.description = payload.description.strip()
+                if linked_transaction is not None:
+                    linked_transaction.description = item.description
             if payload.category is not None and payload.category.strip():
                 item.category = payload.category.strip()
                 if linked_transaction is not None:
@@ -1263,6 +1489,8 @@ def decide_pdf_upload_item(
             normalized_title = payload.title.strip()
             if normalized_title:
                 item.title = normalized_title
+        if payload.description is not None:
+            item.description = payload.description.strip()
         if payload.category is not None:
             normalized_category = payload.category.strip()
             if normalized_category:
@@ -1273,6 +1501,7 @@ def decide_pdf_upload_item(
         new_transaction = Transaction(
             user_id=current_user.id,
             title=item.title,
+            description=item.description or "",
             amount=item.amount,
             category=item.category,
             date=item.date,
@@ -1311,6 +1540,137 @@ def transactions(
         .all()
     )
     return items
+
+
+def _get_owned_plan(db: Session, current_user: User, plan_id: int) -> Plan:
+    plan = (
+        db.query(Plan)
+        .filter(Plan.id == plan_id, Plan.user_id == current_user.id)
+        .first()
+    )
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan bulunamadı")
+    return plan
+
+
+def _serialize_plan(plan: Plan) -> dict[str, Any]:
+    spent_amount = sum((float(entry.amount or 0) for entry in plan.entries), 0.0)
+    target_amount = float(plan.target_amount or 0)
+    total_installments = int(plan.total_installments or 0)
+    paid_installments = int(plan.paid_installments or 0)
+    return {
+        "id": plan.id,
+        "name": plan.name,
+        "plan_type": plan.plan_type,
+        "target_amount": target_amount,
+        "monthly_amount": float(plan.monthly_amount or 0),
+        "total_installments": total_installments,
+        "paid_installments": paid_installments,
+        "remaining_installments": max(total_installments - paid_installments, 0),
+        "spent_amount": spent_amount,
+        "remaining_amount": max(target_amount - spent_amount, 0),
+        "start_date": plan.start_date.isoformat(),
+        "notes": plan.notes or "",
+        "entries": [
+            {
+                "id": entry.id,
+                "title": entry.title,
+                "amount": float(entry.amount or 0),
+                "date": entry.date.isoformat(),
+                "notes": entry.notes or "",
+            }
+            for entry in plan.entries
+        ],
+    }
+
+
+@app.get("/plans")
+def list_plans(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plans = (
+        db.query(Plan)
+        .filter(Plan.user_id == current_user.id)
+        .order_by(Plan.id.desc())
+        .all()
+    )
+    return [_serialize_plan(plan) for plan in plans]
+
+
+@app.post("/plans", status_code=201)
+def create_plan(
+    payload: PlanCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if payload.plan_type not in {"budget", "installment"}:
+        raise HTTPException(status_code=400, detail="Geçersiz plan türü")
+    if not payload.name.strip():
+        raise HTTPException(status_code=400, detail="Plan adı boş olamaz")
+    if payload.target_amount < 0 or payload.monthly_amount < 0:
+        raise HTTPException(status_code=400, detail="Tutarlar negatif olamaz")
+    if payload.total_installments < 0 or payload.paid_installments < 0:
+        raise HTTPException(status_code=400, detail="Taksit sayıları negatif olamaz")
+    if payload.paid_installments > payload.total_installments:
+        raise HTTPException(status_code=400, detail="Ödenen taksit toplam taksitten fazla olamaz")
+
+    plan = Plan(
+        user_id=current_user.id,
+        name=payload.name.strip(),
+        plan_type=payload.plan_type,
+        target_amount=payload.target_amount,
+        monthly_amount=payload.monthly_amount,
+        total_installments=payload.total_installments,
+        paid_installments=payload.paid_installments,
+        start_date=payload.start_date,
+        notes=payload.notes.strip(),
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    return _serialize_plan(plan)
+
+
+@app.post("/plans/{plan_id}/entries", status_code=201)
+def add_plan_entry(
+    plan_id: int,
+    payload: PlanEntryCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan = _get_owned_plan(db, current_user, plan_id)
+    if not payload.title.strip():
+        raise HTTPException(status_code=400, detail="Kayıt adı boş olamaz")
+    if payload.amount <= 0:
+        raise HTTPException(status_code=400, detail="Tutar sıfırdan büyük olmalı")
+    if plan.plan_type == "installment" and plan.paid_installments >= plan.total_installments:
+        raise HTTPException(status_code=400, detail="Bu planın tüm taksitleri tamamlandı")
+
+    entry = PlanEntry(
+        plan_id=plan.id,
+        title=payload.title.strip(),
+        amount=payload.amount,
+        date=payload.date,
+        notes=payload.notes.strip(),
+    )
+    db.add(entry)
+    if plan.plan_type == "installment":
+        plan.paid_installments += 1
+    db.commit()
+    db.refresh(plan)
+    return _serialize_plan(plan)
+
+
+@app.delete("/plans/{plan_id}", status_code=204)
+def delete_plan(
+    plan_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    plan = _get_owned_plan(db, current_user, plan_id)
+    db.delete(plan)
+    db.commit()
 
 
 @app.post("/transactions", response_model=TransactionOut, status_code=201)

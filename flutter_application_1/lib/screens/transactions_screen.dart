@@ -464,6 +464,18 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                                 color: Color(0xFF1E2722),
                                               ),
                                             ),
+                                            if ((tx['description']?.toString().trim() ?? '').isNotEmpty) ...[
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                tx['description'].toString(),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                  color: Color(0xFF7B887F),
+                                                ),
+                                              ),
+                                            ],
                                             const SizedBox(height: 4),
                                             Text(
                                               _formatDate(tx['date']?.toString() ?? ''),

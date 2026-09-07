@@ -30,6 +30,7 @@ class PdfUploadItem(Base):
     upload_id = Column(Integer, ForeignKey("pdf_uploads.id"), nullable=False, index=True)
     date = Column(Date, nullable=False)
     title = Column(String(255), nullable=False)
+    description = Column(String(500), nullable=False, default="", server_default="")
     amount = Column(Numeric(12, 2), nullable=False)
     category = Column(String(100), nullable=False)
     source_type = Column(String(20), nullable=False, default="bank", server_default="bank")

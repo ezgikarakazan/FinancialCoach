@@ -133,14 +133,42 @@ class _UploadScreenState extends State<UploadScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text("PDF yüklenirken hata: $e")));
+        _showUploadError(e);
         setState(() => _currentStep = 0);
       }
     } finally {
       setState(() => _isProcessing = false);
     }
+  }
+
+  void _showUploadError(Object error) {
+    final message = error
+        .toString()
+        .replaceFirst('Exception: ', '')
+        .replaceFirst('PDF yüklenemedi: ', '');
+    final isCreditCardMessage = message.toLowerCase().contains('kredi kartı');
+    final isStatementTypeError = message.toLowerCase().contains('seçeneğini');
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('PDF yüklenirken hata: $message'),
+        duration: const Duration(seconds: 6),
+        action: isStatementTypeError
+            ? SnackBarAction(
+                label: isCreditCardMessage
+                    ? 'Kredi kartını seç'
+                    : 'Banka ekstresini seç',
+                onPressed: () {
+                  setState(
+                    () => _statementType = isCreditCardMessage
+                        ? 'credit_card'
+                        : 'bank',
+                  );
+                },
+              )
+            : null,
+      ),
+    );
   }
 
   List<Map<String, dynamic>> _parseCandidatesFromResponse(
@@ -158,6 +186,7 @@ class _UploadScreenState extends State<UploadScreen> {
       final id = idRaw is int ? idRaw : int.tryParse(idRaw?.toString() ?? '');
       final dateRaw = item['date']?.toString();
       final title = item['title']?.toString().trim() ?? '';
+      final description = item['description']?.toString().trim() ?? '';
       final category = item['category']?.toString().trim() ?? 'Diğer';
       final amountRaw = item['amount'];
       final status = item['status']?.toString() ?? 'pending';
@@ -175,6 +204,7 @@ class _UploadScreenState extends State<UploadScreen> {
         'id': id,
         'date': date,
         'title': title,
+        'description': description,
         'amount': amount,
         'category': category,
         'source_type': item['source_type']?.toString() ?? _statementType,
@@ -209,6 +239,7 @@ class _UploadScreenState extends State<UploadScreen> {
         itemId: tx['id'] as int,
         status: status,
         title: shouldAdd ? tx['title'] as String : null,
+        description: shouldAdd ? tx['description'] as String : null,
         category: shouldAdd ? tx['category'] as String : null,
         sourceType: shouldAdd ? tx['source_type'] as String : null,
       );
@@ -240,6 +271,9 @@ class _UploadScreenState extends State<UploadScreen> {
 
   Future<bool> _customizeTransaction(Map<String, dynamic> tx) async {
     final titleController = TextEditingController(text: tx['title'] as String);
+    final descriptionController = TextEditingController(
+      text: tx['description']?.toString() ?? '',
+    );
     var selectedCategory = _categories.contains(tx['category'])
         ? tx['category'] as String
         : 'Diğer';
@@ -258,6 +292,16 @@ class _UploadScreenState extends State<UploadScreen> {
               TextField(
                 controller: titleController,
                 decoration: const InputDecoration(labelText: 'İşlem adı'),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: descriptionController,
+                maxLength: 500,
+                decoration: const InputDecoration(
+                  labelText: 'Açıklama / taksit bilgisi (opsiyonel)',
+                  hintText: 'Örn. Araba taksidi',
+                  counterText: '',
+                ),
               ),
               const SizedBox(height: 16),
               DropdownButtonFormField<String>(
@@ -308,6 +352,7 @@ class _UploadScreenState extends State<UploadScreen> {
                 final title = titleController.text.trim();
                 if (title.isEmpty) return;
                 tx['title'] = title;
+                tx['description'] = descriptionController.text.trim();
                 tx['category'] = selectedCategory;
                 tx['source_type'] = selectedSourceType;
                 Navigator.pop(dialogContext, true);
@@ -320,6 +365,7 @@ class _UploadScreenState extends State<UploadScreen> {
     );
 
     titleController.dispose();
+  descriptionController.dispose();
     return result == true;
   }
 
@@ -750,6 +796,16 @@ class _UploadScreenState extends State<UploadScreen> {
                     ),
                   ],
                 ),
+                if ((tx['description']?.toString().trim() ?? '').isNotEmpty) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    tx['description'].toString(),
+                    style: const TextStyle(
+                      fontSize: 13,
+                      color: Color(0xFF7B887F),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 Text(
                   "${date.day.toString().padLeft(2, '0')}.${date.month.toString().padLeft(2, '0')}.${date.year}",

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FinancialCoach CRM</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <main class="shell">
+      <section id="login-view" class="login-view">
+        <div class="brand-mark">FC</div>
+        <p class="eyebrow">FINANCIALCOACH CRM</p>
+        <h1>Yönetim alanına hoş geldin.</h1>
+        <p class="muted">Kullanıcılarını, kullanım yoğunluğunu ve premium dönüşümünü tek ekrandan izle.</p>
+        <form id="login-form" class="form-stack">
+          <label>E-posta<input id="email" type="email" value="etest58@test.com" required /></label>
+          <label>Şifre<input id="password" type="password" required /></label>
+          <button class="primary-button" type="submit">CRM'e giriş yap</button>
+          <p id="login-error" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section id="dashboard-view" class="dashboard-view hidden">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">FINANCIALCOACH / OPERATIONS</p>
+            <h1>Kontrol merkezi</h1>
+          </div>
+          <div class="topbar-actions">
+            <span id="admin-email" class="admin-chip"></span>
+            <button id="refresh-button" class="ghost-button" type="button">Yenile</button>
+            <button id="logout-button" class="ghost-button" type="button">Çıkış</button>
+          </div>
+        </header>
+
+        <div id="dashboard-error" class="error-banner hidden"></div>
+        <section id="metric-grid" class="metric-grid"></section>
+        <section class="content-grid">
+          <article class="panel panel-accent">
+            <div class="panel-heading"><div><p class="eyebrow">ÜYELİK</p><h2>Premium görünümü</h2></div><span class="signal-dot"></span></div>
+            <div class="membership-bars">
+              <div><div class="bar-label"><span>Premium</span><strong id="premium-label">0</strong></div><div class="bar"><span id="premium-bar"></span></div></div>
+              <div><div class="bar-label"><span>Ücretsiz</span><strong id="free-label">0</strong></div><div class="bar muted-bar"><span id="free-bar"></span></div></div>
+            </div>
+            <p class="panel-note">Premium özelliklerin kullanım ve dönüşüm takibini buradan başlatabilirsin.</p>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">AKIŞ</p><h2>Operasyon sinyalleri</h2></div><span class="pulse-icon">↗</span></div>
+            <div class="signal-list">
+              <div><span>İncelenmeyi bekleyen PDF işlemi</span><strong id="pending-label">0</strong></div>
+              <div><span>Oluşturulan finans planı</span><strong id="plans-label">0</strong></div>
+              <div><span>Toplam kaydedilen işlem</span><strong id="transactions-label">0</strong></div>
+            </div>
+          </article>
+        </section>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

@@ -53,6 +53,22 @@ def ensure_user_login_security_columns() -> None:
             connection.execute(text("ALTER TABLE users ADD COLUMN locked_until DATETIME"))
 
 
+def ensure_user_access_columns() -> None:
+    """Eski kullanıcılara rol ve abonelik alanlarını ekler."""
+    inspector = inspect(engine)
+    if "users" not in inspector.get_table_names():
+        return
+
+    columns = [col["name"] for col in inspector.get_columns("users")]
+    with engine.begin() as connection:
+        if "role" not in columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'user'"))
+        if "subscription_type" not in columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN subscription_type VARCHAR(20) DEFAULT 'free'"))
+        if "subscription_expires_at" not in columns:
+            connection.execute(text("ALTER TABLE users ADD COLUMN subscription_expires_at DATETIME"))
+
+
 def ensure_transaction_source_type_column() -> None:
     """Eski transaction kayıtlarına banka/kredi kartı kaynağı bilgisi ekler."""
     inspector = inspect(engine)
@@ -112,6 +128,25 @@ def ensure_pdf_upload_statement_type_columns() -> None:
             if "transaction_type" not in item_columns:
                 connection.execute(
                     text("ALTER TABLE pdf_upload_items ADD COLUMN transaction_type VARCHAR(30) DEFAULT 'expense'")
+                )
+
+
+def ensure_description_columns() -> None:
+    """Eski işlem ve PDF öğelerine isteğe bağlı açıklama alanı ekler."""
+    inspector = inspect(engine)
+    with engine.begin() as connection:
+        if "transactions" in inspector.get_table_names():
+            columns = [col["name"] for col in inspector.get_columns("transactions")]
+            if "description" not in columns:
+                connection.execute(
+                    text("ALTER TABLE transactions ADD COLUMN description VARCHAR(500) DEFAULT ''")
+                )
+
+        if "pdf_upload_items" in inspector.get_table_names():
+            columns = [col["name"] for col in inspector.get_columns("pdf_upload_items")]
+            if "description" not in columns:
+                connection.execute(
+                    text("ALTER TABLE pdf_upload_items ADD COLUMN description VARCHAR(500) DEFAULT ''")
                 )
 
 
