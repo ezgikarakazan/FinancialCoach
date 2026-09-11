@@ -3,8 +3,13 @@ import '../services/api_service.dart';
 
 class ProfilScreen extends StatefulWidget {
   final Future<void> Function() onLogout;
+  final Future<Map<String, dynamic>>? userFuture;
 
-  const ProfilScreen({super.key, required this.onLogout});
+  const ProfilScreen({
+    super.key,
+    required this.onLogout,
+    this.userFuture,
+  });
 
   @override
   State<ProfilScreen> createState() => _ProfilScreenState();
@@ -17,7 +22,241 @@ class _ProfilScreenState extends State<ProfilScreen> {
   @override
   void initState() {
     super.initState();
-    _userFuture = ApiService.getCurrentUser();
+    _userFuture = widget.userFuture ?? ApiService.getCurrentUser();
+  }
+
+  void _retryLoadUser() {
+    setState(() {
+      _userFuture = ApiService.getCurrentUser();
+    });
+  }
+
+  void _showMessage(String message, {bool isError = true}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          backgroundColor: isError ? const Color(0xFFB04242) : const Color(0xFF1E6B52),
+          content: Text(message),
+        ),
+      );
+  }
+
+  Future<void> _openEditProfile() async {
+    final currentUser = await _userFuture.catchError((_) => <String, dynamic>{});
+    if (!mounted) return;
+
+    final nameController = TextEditingController(
+      text: currentUser['name']?.toString() ?? '',
+    );
+    final emailController = TextEditingController(
+      text: currentUser['email']?.toString() ?? '',
+    );
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            bool saving = false;
+            return AlertDialog(
+              title: const Text('Hesap Bilgilerini Düzenle'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Ad Soyad',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: const InputDecoration(
+                        labelText: 'E-posta',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('İptal'),
+                ),
+                FilledButton(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          final name = nameController.text.trim();
+                          final email = emailController.text.trim();
+
+                          if (name.isEmpty || email.isEmpty) {
+                            _showMessage('Ad soyad ve e-posta zorunludur');
+                            return;
+                          }
+
+                          setState(() => saving = true);
+                          try {
+                            final updatedUser = await ApiService.updateCurrentUser(
+                              name: name,
+                              email: email,
+                            );
+                            if (!mounted) return;
+                            setState(() {
+                              _userFuture = Future.value(updatedUser);
+                            });
+                            if (ctx.mounted) {
+                              Navigator.pop(ctx, true);
+                            }
+                            _showMessage('Profil bilgileri güncellendi', isError: false);
+                          } catch (e) {
+                            _showMessage(e.toString().replaceFirst('Exception: ', ''));
+                          } finally {
+                            if (ctx.mounted) {
+                              setState(() => saving = false);
+                            }
+                          }
+                        },
+                  child: saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Kaydet'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    nameController.dispose();
+    emailController.dispose();
+  }
+
+  Future<void> _openChangePassword() async {
+    final currentPasswordController = TextEditingController();
+    final newPasswordController = TextEditingController();
+    final confirmPasswordController = TextEditingController();
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            bool saving = false;
+            return AlertDialog(
+              title: const Text('Şifre Değiştir'),
+              content: SizedBox(
+                width: 420,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: currentPasswordController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Mevcut Şifre',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: newPasswordController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Yeni Şifre',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: confirmPasswordController,
+                      obscureText: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Yeni Şifre Tekrar',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('İptal'),
+                ),
+                FilledButton(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          final currentPassword = currentPasswordController.text.trim();
+                          final newPassword = newPasswordController.text.trim();
+                          final confirmPassword = confirmPasswordController.text.trim();
+
+                          if (currentPassword.isEmpty || newPassword.isEmpty || confirmPassword.isEmpty) {
+                            _showMessage('Tüm şifre alanları zorunludur');
+                            return;
+                          }
+
+                          if (newPassword.length < 8) {
+                            _showMessage('Yeni şifre en az 8 karakter olmalıdır');
+                            return;
+                          }
+
+                          if (newPassword != confirmPassword) {
+                            _showMessage('Yeni şifreler eşleşmiyor');
+                            return;
+                          }
+
+                          setState(() => saving = true);
+                          try {
+                            await ApiService.changePassword(
+                              currentPassword: currentPassword,
+                              newPassword: newPassword,
+                            );
+                            if (!mounted) return;
+                            if (ctx.mounted) {
+                              Navigator.pop(ctx, true);
+                            }
+                            _showMessage('Şifre başarıyla güncellendi', isError: false);
+                          } catch (e) {
+                            _showMessage(e.toString().replaceFirst('Exception: ', ''));
+                          } finally {
+                            if (ctx.mounted) {
+                              setState(() => saving = false);
+                            }
+                          }
+                        },
+                  child: saving
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Kaydet'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    currentPasswordController.dispose();
+    newPasswordController.dispose();
+    confirmPasswordController.dispose();
   }
 
   Future<void> _confirmLogout() async {
@@ -57,6 +296,51 @@ class _ProfilScreenState extends State<ProfilScreen> {
       body: FutureBuilder<Map<String, dynamic>>(
         future: _userFuture,
         builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (snapshot.hasError || !snapshot.hasData) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.error_outline,
+                      size: 48,
+                      color: Colors.red,
+                    ),
+                    const SizedBox(height: 16),
+                    const Text(
+                      'Profil bilgisi alınamadı',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      snapshot.error?.toString() ?? 'Lütfen daha sonra tekrar deneyin.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    FilledButton.icon(
+                      onPressed: _retryLoadUser,
+                      icon: const Icon(Icons.refresh),
+                      label: const Text('Tekrar Dene'),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }
+
           final name = snapshot.data?['name']?.toString() ?? 'Kullanıcı';
           final email = snapshot.data?['email']?.toString() ?? '';
 
@@ -76,35 +360,31 @@ class _ProfilScreenState extends State<ProfilScreen> {
                   ),
                 ),
                 const SizedBox(height: 20),
-                if (snapshot.connectionState == ConnectionState.waiting)
-                  const CircularProgressIndicator()
-                else ...[
-                  Text(
-                    name,
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                    ),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    email,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  email,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey[600],
                   ),
-                ],
+                ),
                 const SizedBox(height: 30),
                 _buildProfileOption(
                   icon: Icons.account_circle,
                   title: 'Hesap Bilgileri',
-                  onTap: () {},
+                  onTap: _openEditProfile,
                 ),
                 _buildProfileOption(
                   icon: Icons.lock,
                   title: 'Şifre Değiştir',
-                  onTap: () {},
+                  onTap: _openChangePassword,
                 ),
                 _buildProfileOption(
                   icon: Icons.notifications,

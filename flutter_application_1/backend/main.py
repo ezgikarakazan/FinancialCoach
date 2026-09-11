@@ -194,6 +194,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class UpdateProfileRequest(BaseModel):
+    name: str
+    email: EmailStr
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+
 class PlanCreate(BaseModel):
     name: str
     plan_type: str
@@ -997,6 +1007,50 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
 @app.get("/auth/me", response_model=UserAuthOut)
 def me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@app.put("/auth/me", response_model=UserAuthOut)
+def update_me(
+    payload: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    name = payload.name.strip()
+    email = payload.email.strip().lower()
+
+    if not name:
+        raise HTTPException(status_code=400, detail="Ad soyad alanı zorunludur")
+
+    existing_user = (
+        db.query(User)
+        .filter(User.email == email, User.id != current_user.id)
+        .first()
+    )
+    if existing_user is not None:
+        raise HTTPException(status_code=409, detail="Bu e-posta başka bir kullanıcıya ait")
+
+    current_user.name = name
+    current_user.email = email
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+
+@app.post("/auth/change-password")
+def change_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if len(payload.new_password.strip()) < 8:
+        raise HTTPException(status_code=400, detail="Yeni şifre en az 8 karakter olmalıdır")
+
+    if not verify_password(payload.current_password, current_user.password_hash):
+        raise HTTPException(status_code=401, detail="Mevcut şifre yanlış")
+
+    current_user.password_hash = hash_password(payload.new_password.strip())
+    db.commit()
+    return {"message": "Şifre başarıyla değiştirildi"}
 
 
 def get_admin_user(current_user: User = Depends(get_current_user)) -> User:

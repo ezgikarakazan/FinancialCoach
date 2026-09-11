@@ -120,6 +120,46 @@ class ApiService {
     throw Exception(_extractError(response));
   }
 
+  static Future<Map<String, dynamic>> updateCurrentUser({
+    required String name,
+    required String email,
+  }) async {
+    final response = await http.put(
+      Uri.parse("$baseUrl/auth/me"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({
+        "name": name,
+        "email": email,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return (_decodeBody(response) as Map<String, dynamic>);
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<Map<String, dynamic>> changePassword({
+    required String currentPassword,
+    required String newPassword,
+  }) async {
+    final response = await http.post(
+      Uri.parse("$baseUrl/auth/change-password"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({
+        "current_password": currentPassword,
+        "new_password": newPassword,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return (_decodeBody(response) as Map<String, dynamic>);
+    }
+
+    throw Exception(_extractError(response));
+  }
+
   static Future<List<dynamic>> getTransactions() async {
     final response = await http.get(
       Uri.parse("$baseUrl/transactions"),

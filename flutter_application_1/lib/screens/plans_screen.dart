@@ -198,41 +198,116 @@ class _PlanCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 4),
-            ExpansionTile(
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: EdgeInsets.zero,
-              title: const Text('Detay', style: TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: Text('${(plan['entries'] as List<dynamic>? ?? []).length} kayıt'),
-              children: [
-                ...((plan['entries'] as List<dynamic>? ?? []).map((rawEntry) {
-                  final entry = rawEntry as Map<String, dynamic>;
-                  final notes = entry['notes']?.toString() ?? '';
-                  return ListTile(
-                    contentPadding: EdgeInsets.zero,
-                    leading: CircleAvatar(
-                      radius: 16,
-                      backgroundColor: color.withValues(alpha: 0.12),
-                      child: Icon(Icons.receipt_long, size: 17, color: color),
+            Theme(
+              data: Theme.of(context).copyWith(
+                dividerColor: Colors.transparent,
+                listTileTheme: const ListTileThemeData(contentPadding: EdgeInsets.zero),
+              ),
+              child: ExpansionTile(
+                tilePadding: EdgeInsets.zero,
+                childrenPadding: const EdgeInsets.only(top: 8, bottom: 4),
+                shape: const RoundedRectangleBorder(side: BorderSide.none),
+                collapsedShape: const RoundedRectangleBorder(side: BorderSide.none),
+                title: Row(
+                  children: [
+                    const Text('Detay', style: TextStyle(fontWeight: FontWeight.w700)),
+                    const Spacer(),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF0F0EA),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        '${(plan['entries'] as List<dynamic>? ?? []).length} kayıt',
+                        style: const TextStyle(fontSize: 12, color: Color(0xFF5E615B)),
+                      ),
                     ),
-                    title: Text(entry['title']?.toString() ?? 'Kayıt'),
-                    subtitle: Text(
-                      notes.isEmpty ? _date(entry['date']) : '${_date(entry['date'])} • $notes',
+                  ],
+                ),
+                children: [
+                  if ((plan['entries'] as List<dynamic>? ?? []).isEmpty)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8F6F1),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFE7E0D5)),
+                      ),
+                      child: const Text(
+                        'Henüz harcama eklenmedi.',
+                        style: TextStyle(color: Color(0xFF6D736E)),
+                      ),
+                    )
+                  else
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF8F6F1),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFE7E0D5)),
+                      ),
+                      child: Column(
+                        children: (plan['entries'] as List<dynamic>).map((rawEntry) {
+                          final entry = rawEntry as Map<String, dynamic>;
+                          final notes = entry['notes']?.toString() ?? '';
+                          final date = _date(entry['date']);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Container(
+                                  width: 36,
+                                  height: 36,
+                                  margin: const EdgeInsets.only(right: 10),
+                                  decoration: BoxDecoration(
+                                    color: color.withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(Icons.receipt_long, size: 18, color: color),
+                                ),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        entry['title']?.toString() ?? 'Kayıt',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w700,
+                                          fontSize: 14,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        notes.isEmpty ? date : '$date • $notes',
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          color: Color(0xFF6D736E),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  _money(entry['amount']),
+                                  style: TextStyle(
+                                    color: color,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        }).toList(),
+                      ),
                     ),
-                    trailing: Text(
-                      _money(entry['amount']),
-                      style: TextStyle(color: color, fontWeight: FontWeight.w800),
-                    ),
-                  );
-                })),
-                if ((plan['entries'] as List<dynamic>? ?? []).isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(bottom: 12),
-                    child: Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('Henüz harcama eklenmedi.'),
-                    ),
-                  ),
-              ],
+                ],
+              ),
             ),
           ],
         ),
