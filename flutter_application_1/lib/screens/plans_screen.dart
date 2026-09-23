@@ -1,5 +1,10 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import '../services/api_service.dart';
+import '../services/notification_service.dart';
 
 class PlansScreen extends StatefulWidget {
   const PlansScreen({super.key});
@@ -10,15 +15,200 @@ class PlansScreen extends StatefulWidget {
 
 class _PlansScreenState extends State<PlansScreen> {
   late Future<List<dynamic>> _plansFuture;
+  final List<Map<String, dynamic>> _reminders = [];
+  bool _loadingReminders = true;
 
   @override
   void initState() {
     super.initState();
     _refresh();
+    _loadReminders();
   }
 
-  void _refresh() {
+  Future<void> _loadReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('reminders_v1');
+
+    if (!mounted) return;
+
+    setState(() {
+      _loadingReminders = false;
+      if (raw != null && raw.isNotEmpty) {
+        final decoded = jsonDecode(raw);
+        if (decoded is List) {
+          _reminders.clear();
+          for (final item in decoded) {
+            if (item is Map) {
+              _reminders.add(Map<String, dynamic>.from(item));
+            }
+          }
+        }
+      }
+    });
+  }
+
+  Future<void> _saveReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('reminders_v1', jsonEncode(_reminders));
+  }
+
+  Future<void> _showAddReminderDialog() async {
+    final titleController = TextEditingController();
+    final amountController = TextEditingController();
+    final dayController = TextEditingController(text: '15');
+    final noteController = TextEditingController();
+    String type = 'Ödeme';
+
+    final result = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Özel hatırlatıcı ekle'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: titleController,
+                  decoration: const InputDecoration(
+                    labelText: 'Başlık',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: type,
+                  decoration: const InputDecoration(
+                    labelText: 'Tür',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: const ['Ödeme', 'Yatırım', 'Hedef']
+                      .map((label) => DropdownMenuItem(value: label, child: Text(label)))
+                      .toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      type = value;
+                    }
+                  },
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: dayController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Hatırlatma günü (1-31)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: amountController,
+                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  decoration: const InputDecoration(
+                    labelText: 'Tutar (isteğe bağlı)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: noteController,
+                  maxLines: 3,
+                  decoration: const InputDecoration(
+                    labelText: 'Not',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('İptal'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('Kaydet'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (result != true) return;
+
+    final title = titleController.text.trim();
+    final dayText = dayController.text.trim();
+    final amountText = amountController.text.trim();
+    final note = noteController.text.trim();
+
+    if (title.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Başlık zorunlu.')),
+        );
+      }
+      return;
+    }
+
+    final parsedDay = int.tryParse(dayText) ?? 15;
+    final parsedAmount = double.tryParse(amountText.replaceAll(',', '.'));
+    final reminderDay = parsedDay.clamp(1, 31);
+
+    final reminder = {
+      'title': title,
+      'type': type,
+      'day': reminderDay,
+      'amount': parsedAmount ?? 0.0,
+      'note': note,
+      'enabled': true,
+    };
+
+    setState(() {
+      _reminders.insert(0, reminder);
+    });
+    await _saveReminders();
+
+    final message = type == 'Ödeme'
+        ? '$title ödemesi için ayın $reminderDay. günü yaklaşıyor. Hazırlığınızı kontrol edin.'
+        : '$title için para biriktirmeye devam edin. Yatırım gününüz yaklaştı.';
+
+    await InstallmentReminderService.scheduleMonthlyBillReminder(
+      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      title: title,
+      reminderDay: reminderDay,
+      customMessage: message,
+    );
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Hatırlatıcı oluşturuldu.')),
+      );
+    }
+  }
+
+  Future<void> _deleteReminder(int index) async {
+    setState(() {
+      _reminders.removeAt(index);
+    });
+    await _saveReminders();
+  }
+
+  Future<void> _refresh() async {
     _plansFuture = ApiService.getPlans();
+    final plans = await _plansFuture;
+    for (final plan in plans) {
+      final planMap = plan as Map<String, dynamic>;
+      if (planMap['plan_type'] == 'installment') {
+        final paymentDay = (planMap['payment_day'] as num?)?.toInt() ?? 1;
+        await InstallmentReminderService.scheduleMonthlyBillReminder(
+          id: planMap['id'] as int,
+          title: planMap['name']?.toString() ?? 'Taksit',
+          reminderDay: paymentDay,
+          customMessage: '${planMap['name']?.toString() ?? 'Taksit'} ödemesi için ayın ${paymentDay}. günü yaklaşıyor. Hazırlığınızı kontrol edin.',
+        );
+      }
+    }
   }
 
   Future<void> _createPlan() async {
@@ -88,12 +278,135 @@ class _PlansScreenState extends State<PlansScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 120),
                 children: [
-                  Text('Planlar', style: theme.textTheme.headlineLarge),
+                  Text('Planlar & Hatırlatıcılar', style: theme.textTheme.headlineLarge),
                   const SizedBox(height: 8),
                   Text(
-                    'Taksitlerini ve hedef bütçelerini tek yerde takip et.',
+                    'Ödeme tarihlerini ve özel anımsatıcıları tek ekranda yönet.',
                     style: theme.textTheme.bodyMedium,
                   ),
+                  const SizedBox(height: 18),
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFFCF6),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: const Color(0xFFE8DFD3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const Text(
+                                'Özel hatırlatıcılar',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF1E2722),
+                                ),
+                              ),
+                              const SizedBox(height: 6),
+                              Text(
+                                _loadingReminders
+                                    ? 'Yükleniyor...'
+                                    : _reminders.isEmpty
+                                        ? 'Plan dışında hatırlatıcı yok.'
+                                        : '${_reminders.length} özel anımsatıcı aktif',
+                                style: const TextStyle(
+                                  color: Color(0xFF68756E),
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        FilledButton.icon(
+                          onPressed: _showAddReminderDialog,
+                          icon: const Icon(Icons.notifications_active_outlined),
+                          label: const Text('Ekle'),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  if (!_loadingReminders)
+                    if (_reminders.isEmpty)
+                      Container(
+                        padding: const EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFFF6F9F8),
+                          borderRadius: BorderRadius.circular(16),
+                          border: Border.all(color: const Color(0xFFE4EAE7)),
+                        ),
+                        child: const Text(
+                          'Özel hatırlatıcı ekleyerek araba taksidi, kira, sigorta veya hedef tarihlerini ayrı ayrı takip edebilirsin.',
+                          style: TextStyle(color: Color(0xFF5F6F68), height: 1.5),
+                        ),
+                      )
+                    else
+                      ..._reminders.asMap().entries.map((entry) {
+                        final index = entry.key;
+                        final reminder = entry.value;
+                        final title = reminder['title']?.toString() ?? 'Hatırlatıcı';
+                        final type = reminder['type']?.toString() ?? 'Ödeme';
+                        final day = (reminder['day'] as num?)?.toInt() ?? 15;
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFFCF6),
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(color: const Color(0xFFE8DFD3)),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              CircleAvatar(
+                                radius: 18,
+                                backgroundColor: const Color(0xFFE7EFEA),
+                                child: Icon(
+                                  type == 'Yatırım'
+                                      ? Icons.trending_up_rounded
+                                      : type == 'Hedef'
+                                          ? Icons.flag_rounded
+                                          : Icons.receipt_long_rounded,
+                                  color: const Color(0xFF2F5646),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      title,
+                                      style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w800,
+                                        color: Color(0xFF1E2722),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '$type • ayın $day. günü',
+                                      style: const TextStyle(
+                                        fontSize: 12,
+                                        color: Color(0xFF68756E),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: () => _deleteReminder(index),
+                                icon: const Icon(Icons.delete_outline),
+                                color: const Color(0xFFB6542D),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
                   const SizedBox(height: 24),
                   if (plans.isEmpty)
                     const _EmptyPlans()
@@ -347,12 +660,13 @@ class _CreatePlanDialogState extends State<_CreatePlanDialog> {
   final total = TextEditingController();
   final paid = TextEditingController(text: '0');
   final notes = TextEditingController();
+  final paymentDay = TextEditingController(text: '1');
   String type = 'budget';
   bool saving = false;
 
   @override
   void dispose() {
-    for (final controller in [name, target, monthly, total, paid, notes]) {
+    for (final controller in [name, target, monthly, total, paid, paymentDay, notes]) {
       controller.dispose();
     }
     super.dispose();
@@ -363,10 +677,11 @@ class _CreatePlanDialogState extends State<_CreatePlanDialog> {
     final monthlyAmount = double.tryParse(monthly.text.replaceAll(',', '.')) ?? 0;
     final totalInstallments = int.tryParse(total.text) ?? 0;
     final paidInstallments = int.tryParse(paid.text) ?? 0;
+    final installmentDay = int.tryParse(paymentDay.text) ?? 1;
     if (name.text.trim().isEmpty || (type == 'budget' && targetAmount <= 0) || (type == 'installment' && (totalInstallments <= 0 || monthlyAmount <= 0))) return;
     setState(() => saving = true);
     try {
-      await ApiService.createPlan(name: name.text.trim(), planType: type, targetAmount: targetAmount, monthlyAmount: monthlyAmount, totalInstallments: totalInstallments, paidInstallments: paidInstallments, startDate: DateTime.now(), notes: notes.text.trim());
+      await ApiService.createPlan(name: name.text.trim(), planType: type, targetAmount: targetAmount, monthlyAmount: monthlyAmount, totalInstallments: totalInstallments, paidInstallments: paidInstallments, paymentDay: installmentDay, startDate: DateTime.now(), notes: notes.text.trim());
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
@@ -386,6 +701,7 @@ class _CreatePlanDialogState extends State<_CreatePlanDialog> {
         TextField(controller: monthly, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Aylık taksit (₺)')),
         TextField(controller: total, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Toplam taksit sayısı')),
         TextField(controller: paid, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Daha önce ödenen taksit')),
+        TextField(controller: paymentDay, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Ödeme günü (1-31)')),
       ],
       TextField(controller: notes, maxLines: 2, decoration: const InputDecoration(labelText: 'Not (opsiyonel)')),
     ])),

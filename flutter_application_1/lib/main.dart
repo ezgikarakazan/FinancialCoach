@@ -3,6 +3,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/main_screen.dart';
 import 'services/api_service.dart';
+import 'services/notification_service.dart';
 
 void main() {
   runApp(const FinanceCoachApp());
@@ -125,6 +126,8 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
   }
 
   Future<void> _bootstrap() async {
+    await InstallmentReminderService.initialize();
+
     final prefs = await SharedPreferences.getInstance();
     final hasSeenOnboarding = prefs.getBool(onboardingKey) ?? false;
     final savedToken = prefs.getString(tokenKey);

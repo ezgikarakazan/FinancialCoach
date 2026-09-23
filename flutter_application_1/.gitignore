@@ -50,3 +50,8 @@ backend/*.db
 backend/uploads/
 backend/.env
 backend/.jwt_secret
+
+# Playwright / Node test artifacts
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/

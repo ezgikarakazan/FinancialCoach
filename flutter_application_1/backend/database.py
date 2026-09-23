@@ -150,6 +150,22 @@ def ensure_description_columns() -> None:
                 )
 
 
+def ensure_plan_payment_day_column() -> None:
+    """Eski planlara aylık ödeme günü bilgisini ekler."""
+    inspector = inspect(engine)
+    if "plans" not in inspector.get_table_names():
+        return
+
+    columns = [col["name"] for col in inspector.get_columns("plans")]
+    if "payment_day" in columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("ALTER TABLE plans ADD COLUMN payment_day INTEGER DEFAULT 1")
+        )
+
+
 def test_connection() -> bool:
     try:
         with engine.connect() as connection:

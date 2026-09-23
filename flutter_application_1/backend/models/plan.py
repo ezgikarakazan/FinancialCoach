@@ -17,6 +17,7 @@ class Plan(Base):
     monthly_amount = Column(Numeric(12, 2), nullable=False, default=0, server_default="0")
     total_installments = Column(Integer, nullable=False, default=0, server_default="0")
     paid_installments = Column(Integer, nullable=False, default=0, server_default="0")
+    payment_day = Column(Integer, nullable=False, default=1, server_default="1")
     start_date = Column(Date, nullable=False, default=date.today)
     notes = Column(Text, nullable=False, default="", server_default="")
 

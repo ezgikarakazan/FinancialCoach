@@ -1,0 +1,15 @@
+# Use this workspace to collaborate
+workspace:
+  id: b76a958d-19a2-4e9d-8ccd-7651c401e48d
+
+localResources:
+  collections:
+    - ../FinancialCoach.postman_collection.json
+  environments:
+    - ../FinancialCoach.local.postman_environment.json
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../postman/collections/Trading Gateway Service: dd63b0d8-9c66-4e93-96b1-cee3275afc5e

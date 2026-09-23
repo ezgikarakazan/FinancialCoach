@@ -386,6 +386,7 @@ class ApiService {
     required double monthlyAmount,
     required int totalInstallments,
     required int paidInstallments,
+    required int paymentDay,
     required DateTime startDate,
     required String notes,
   }) async {
@@ -399,6 +400,7 @@ class ApiService {
         "monthly_amount": monthlyAmount,
         "total_installments": totalInstallments,
         "paid_installments": paidInstallments,
+        "payment_day": paymentDay,
         "start_date": _dateOnly(startDate),
         "notes": notes,
       }),

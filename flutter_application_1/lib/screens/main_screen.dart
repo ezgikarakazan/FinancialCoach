@@ -68,11 +68,11 @@ class _MainScreenState extends State<MainScreen> {
             selectedIcon: Icon(Icons.analytics),
             label: "Analiz",
           ),
-            NavigationDestination(
-              icon: Icon(Icons.show_chart_outlined),
-              selectedIcon: Icon(Icons.show_chart),
-              label: "AI",
-            ),
+          NavigationDestination(
+            icon: Icon(Icons.show_chart_outlined),
+            selectedIcon: Icon(Icons.show_chart),
+            label: "AI",
+          ),
           NavigationDestination(
             icon: Icon(Icons.person_outline),
             selectedIcon: Icon(Icons.person),

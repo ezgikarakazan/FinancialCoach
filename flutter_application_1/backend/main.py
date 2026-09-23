@@ -8,6 +8,7 @@ import os
 import re
 import secrets
 import statistics
+import unicodedata
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -30,6 +31,7 @@ from database import (
     ensure_transaction_user_id_column,
     ensure_user_login_security_columns,
     ensure_user_access_columns,
+    ensure_plan_payment_day_column,
 )
 from models.transaction import Base, Transaction
 from models.user import User
@@ -52,6 +54,7 @@ ensure_transaction_source_type_column()
 ensure_transaction_classification_columns()
 ensure_description_columns()
 ensure_pdf_upload_statement_type_columns()
+ensure_plan_payment_day_column()
 
 configured_admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
 if configured_admin_email:
@@ -211,6 +214,7 @@ class PlanCreate(BaseModel):
     monthly_amount: Decimal = Decimal("0")
     total_installments: int = 0
     paid_installments: int = 0
+    payment_day: int = 1
     start_date: date
     notes: str = ""
 
@@ -506,9 +510,9 @@ def _is_statement_notice(title: str) -> bool:
 
 def _build_transaction(tx_date: date, title: str, amount: float) -> dict[str, Any]:
     normalized_title = " ".join((title or "").split()).strip()
-    # OCR gürültüsünden kalan 1-2 karakterlik anlamsız parçalar ("we", "sd" gibi)
-    # kullanıcıya gösterilecek kadar anlamlı değil; bu durumda nötr bir başlık kullan.
-    if len(normalized_title.replace(" ", "")) < 3:
+    if not normalized_title:
+        normalized_title = "Ekstre İşlemi"
+    elif len(normalized_title.replace(" ", "")) < 2 and not any(ch.isalpha() for ch in normalized_title):
         normalized_title = "Ekstre İşlemi"
     return {
         "date": tx_date.isoformat(),
@@ -552,6 +556,10 @@ def parse_transactions_from_text(text: str) -> List[dict[str, Any]]:
         if not title_tokens:
             title_tokens = tokens[amount_idx + 1:]
         title = " ".join(title_tokens).strip()
+        if not title:
+            title = "Ekstre İşlemi"
+        else:
+            title = " ".join(part.strip("(),;:[]{}<>.") for part in title.split() if part.strip("(),;:[]{}<>.") and part.strip("(),;:[]{}<>.").lower() not in {"tl", "try", "usd", "eur", "gbp"})
         if not title:
             title = "Ekstre İşlemi"
 
@@ -615,7 +623,6 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
         if not texts:
             continue
 
-        # Satırda herhangi bir konumdaki ilk tarihi bul
         date_idx = -1
         tx_date = None
         for idx, t in enumerate(texts):
@@ -629,7 +636,6 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
         if tx_date is None:
             continue
 
-        # Tarihten sonraki tüm tutarları bul
         amount_indices = [
             i for i, t in enumerate(texts)
             if i > date_idx and _parse_statement_amount(t) is not None
@@ -638,15 +644,11 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
         if not amount_indices:
             continue
 
-        # İki tutar varsa ilki işlem tutarı, ikincisi bakiye
         chosen_idx = amount_indices[-2] if len(amount_indices) >= 2 else amount_indices[-1]
         amount = _parse_statement_amount(texts[chosen_idx])
         if amount is None:
             continue
 
-        # Tarih ile seçilen işlem tutarı arasındaki metin açıklama sütunudur.
-        # Bazı bankalar işlem tutarını ve bakiyeyi farklı sütunlarda verir;
-        # bu nedenle yalnızca ilk tutardan önceki kelimelere güvenilmez.
         title_parts = [
             t for i, t in enumerate(texts)
             if date_idx < i < chosen_idx
@@ -663,9 +665,27 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
                 and not _CURRENCY_CODE_RE.match(t)
                 and _parse_statement_amount(t) is None
             ]
+        if not title_parts and chosen_idx + 1 < len(texts):
+            title_parts = [
+                t for i, t in enumerate(texts)
+                if chosen_idx < i <= min(len(texts) - 1, chosen_idx + 4)
+                and not _DATE_RE.match(t)
+                and not _PURE_DIGITS_RE.match(t)
+                and not _CURRENCY_CODE_RE.match(t)
+                and _parse_statement_amount(t) is None
+            ]
         if len(title_parts) > _TITLE_TOKEN_LIMIT:
             title_parts = title_parts[-_TITLE_TOKEN_LIMIT:]
-        title = " ".join(title_parts).strip() or "Ekstre İşlemi"
+
+        cleaned_title_parts = []
+        for token in title_parts:
+            cleaned = token.strip("();:[]{}<>.")
+            if cleaned and cleaned.lower() not in {"tl", "try", "usd", "eur", "gbp"}:
+                cleaned_title_parts.append(cleaned)
+
+        title = " ".join(cleaned_title_parts).strip()
+        if not title:
+            title = "Ekstre İşlemi"
 
         item = _build_transaction(tx_date, title, amount)
         if _is_summary_like_transaction(item["title"], item["amount"]) or _is_statement_notice(item["title"]):
@@ -675,11 +695,36 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
     return results
 
 
+def _canonicalize_transaction_key(
+    date_value: str,
+    title: str | None,
+    amount: float | int | Decimal | str | None,
+) -> tuple[str, str, str]:
+    normalized_date = str(date_value or "").strip()
+    normalized_title = " ".join((title or "").split())
+    normalized_title = unicodedata.normalize("NFKD", normalized_title.casefold())
+    normalized_title = "".join(ch for ch in normalized_title if not unicodedata.combining(ch))
+    normalized_title = normalized_title.translate(
+        {ord(ch): None for ch in "()[]{}<>:;,.!?/\\\"'`"}
+    )
+    normalized_title = (
+        normalized_title.replace("ı", "i")
+        .replace("i", "i")
+        .replace("ğ", "g")
+        .replace("ü", "u")
+        .replace("ş", "s")
+        .replace("ö", "o")
+        .replace("ç", "c")
+    )
+    normalized_amount = str(float(amount) if amount is not None else 0.0)
+    return normalized_date, normalized_title.strip(), normalized_amount
+
+
 def _dedupe_transactions(items: List[dict[str, Any]]) -> List[dict[str, Any]]:
-    seen: set[tuple[str, str, float]] = set()
+    seen: set[tuple[str, str, str]] = set()
     deduped: List[dict[str, Any]] = []
     for item in items:
-        key = (item["date"], item["title"], item["amount"])
+        key = _canonicalize_transaction_key(item.get("date"), item.get("title"), item.get("amount"))
         if key in seen:
             continue
         seen.add(key)
@@ -1269,6 +1314,7 @@ async def upload_pdf(
                     refreshed_transactions = parse_transactions_by_ocr_words(file_path)
                 if not refreshed_transactions:
                     refreshed_transactions = parse_transactions_from_text(existing_text)
+                refreshed_transactions = _dedupe_transactions(refreshed_transactions)
                 refreshed_transactions = _normalize_statement_signs(
                     refreshed_transactions,
                     statement_type,
@@ -1381,6 +1427,7 @@ async def upload_pdf(
                 warnings.append(f"Metin ayrıştırma kullanılamadı: {exc}")
 
         _validate_statement_type(statement_type, _detect_statement_type(text))
+        parsed_transactions = _dedupe_transactions(parsed_transactions)
         parsed_transactions = _normalize_statement_signs(parsed_transactions, statement_type)
         _validate_transaction_dates(parsed_transactions)
         detected_institution = _detect_institution_name(text, institution_name)
@@ -1620,6 +1667,7 @@ def _serialize_plan(plan: Plan) -> dict[str, Any]:
         "monthly_amount": float(plan.monthly_amount or 0),
         "total_installments": total_installments,
         "paid_installments": paid_installments,
+        "payment_day": int(plan.payment_day or 1),
         "remaining_installments": max(total_installments - paid_installments, 0),
         "spent_amount": spent_amount,
         "remaining_amount": max(target_amount - spent_amount, 0),
@@ -1668,6 +1716,8 @@ def create_plan(
         raise HTTPException(status_code=400, detail="Taksit sayıları negatif olamaz")
     if payload.paid_installments > payload.total_installments:
         raise HTTPException(status_code=400, detail="Ödenen taksit toplam taksitten fazla olamaz")
+    if payload.plan_type == "installment" and not 1 <= payload.payment_day <= 31:
+        raise HTTPException(status_code=400, detail="Ödeme günü 1 ile 31 arasında olmalı")
 
     plan = Plan(
         user_id=current_user.id,
@@ -1677,6 +1727,7 @@ def create_plan(
         monthly_amount=payload.monthly_amount,
         total_installments=payload.total_installments,
         paid_installments=payload.paid_installments,
+        payment_day=payload.payment_day,
         start_date=payload.start_date,
         notes=payload.notes.strip(),
     )
