@@ -44,7 +44,7 @@
         ],
         "body": {
           "mode": "raw",
-          "raw": "{\n  \"name\": \"Postman Test User\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+          "raw": "{\n  \"first_name\": \"Postman\",\n  \"last_name\": \"Test User\",\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\",\n  \"password_confirmation\": \"{{password}}\"\n}"
         },
         "url": "{{baseUrl}}/auth/register"
       },
@@ -54,8 +54,6 @@
           "script": {
             "type": "text/javascript",
             "exec": [
-              "const email = `postman-${Date.now()}@example.com`;",
-              "pm.environment.set('email', email);",
               "pm.environment.set('password', 'Test1234!');"
             ]
           }

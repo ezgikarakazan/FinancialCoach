@@ -187,9 +187,12 @@ class TransactionOut(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    name: str
     email: EmailStr
     password: str
+    password_confirmation: str
+    first_name: str | None = None
+    last_name: str | None = None
+    name: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -581,12 +584,6 @@ _DATE_RE = re.compile(r'^\d{1,2}[./\-]\d{1,2}[./\-]\d{2,4}$')
 _PURE_DIGITS_RE = re.compile(r'^\d+$')
 _CURRENCY_CODE_RE = re.compile(r'^(TL|TRY|USD|EUR|GBP)$', re.IGNORECASE)
 
-# Açıklama sütunu tutara en yakın olan sütun olduğu için, tarihten sonraki
-# tüm kelimeleri değil, tutara en yakın son birkaç kelimeyi başlık olarak alıyoruz.
-# Bu, banka/şube adı gibi tutardan uzak sütunların başlığa karışmasını önler.
-_TITLE_TOKEN_LIMIT = 6
-
-
 def _merge_signed_amount_tokens(tokens: list[str]) -> list[str]:
     merged: list[str] = []
     index = 0
@@ -616,7 +613,9 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
 
     results: List[dict[str, Any]] = []
 
-    for row_key in sorted(rows.keys()):
+    row_keys = sorted(rows.keys())
+
+    for row_index, row_key in enumerate(row_keys):
         row_words = sorted(rows[row_key], key=lambda w: w["x0"])
         texts = _merge_signed_amount_tokens([w["text"] for w in row_words])
 
@@ -649,33 +648,37 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
         if amount is None:
             continue
 
-        title_parts = [
-            t for i, t in enumerate(texts)
-            if date_idx < i < chosen_idx
-            and not _PURE_DIGITS_RE.match(t)
-            and not _CURRENCY_CODE_RE.match(t)
-            and _parse_statement_amount(t) is None
+        date_word = next(
+            word for word in row_words
+            if _DATE_RE.match(word["text"])
+            and _parse_statement_date(word["text"]) is not None
+        )
+        amount_words = [
+            word for word in row_words
+            if _parse_statement_amount(word["text"]) is not None
+            and word["x0"] > date_word["x0"]
         ]
-        if not title_parts:
-            title_parts = [
-                t for i, t in enumerate(texts)
-                if i > date_idx
-                and not _DATE_RE.match(t)
-                and not _PURE_DIGITS_RE.match(t)
-                and not _CURRENCY_CODE_RE.match(t)
-                and _parse_statement_amount(t) is None
-            ]
-        if not title_parts and chosen_idx + 1 < len(texts):
-            title_parts = [
-                t for i, t in enumerate(texts)
-                if chosen_idx < i <= min(len(texts) - 1, chosen_idx + 4)
-                and not _DATE_RE.match(t)
-                and not _PURE_DIGITS_RE.match(t)
-                and not _CURRENCY_CODE_RE.match(t)
-                and _parse_statement_amount(t) is None
-            ]
-        if len(title_parts) > _TITLE_TOKEN_LIMIT:
-            title_parts = title_parts[-_TITLE_TOKEN_LIMIT:]
+        chosen_amount_word = amount_words[-2] if len(amount_words) >= 2 else amount_words[-1]
+
+        title_parts = []
+        for following_row_key in row_keys[row_index:]:
+            following_words = sorted(rows[following_row_key], key=lambda w: w["x0"])
+            if following_row_key != row_key and any(
+                _DATE_RE.match(word["text"])
+                and _parse_statement_date(word["text"]) is not None
+                for word in following_words
+            ):
+                break
+
+            for word in following_words:
+                token = word["text"]
+                if not date_word["x0"] < word["x0"] < chosen_amount_word["x0"]:
+                    continue
+                if _DATE_RE.match(token) or _PURE_DIGITS_RE.match(token):
+                    continue
+                if _CURRENCY_CODE_RE.match(token):
+                    continue
+                title_parts.append(token)
 
         cleaned_title_parts = []
         for token in title_parts:
@@ -964,15 +967,66 @@ def home():
 
 @app.post("/auth/register", response_model=AuthResponse, status_code=201)
 def register(payload: RegisterRequest, db: Session = Depends(get_db)):
-    name = payload.name.strip()
+    if payload.first_name is not None or payload.last_name is not None:
+        first_name = (payload.first_name or "").strip()
+        last_name = (payload.last_name or "").strip()
+    else:
+        legacy_name_parts = (payload.name or "").strip().split(maxsplit=1)
+        first_name = legacy_name_parts[0] if legacy_name_parts else ""
+        last_name = legacy_name_parts[1] if len(legacy_name_parts) > 1 else ""
+
+    name = " ".join(part for part in (first_name, last_name) if part)
     email = payload.email.strip().lower()
     password = payload.password.strip()
 
-    if not name:
-        raise HTTPException(status_code=400, detail="Ad alanı zorunludur")
+    if not first_name or not last_name:
+        raise HTTPException(status_code=400, detail="Ad ve soyad alanları zorunludur")
+
+    if len(name.split()) < 2:
+        raise HTTPException(status_code=400, detail="Ad ve soyad en az iki kelime olmalıdır")
+
+    if len(name) > 120:
+        raise HTTPException(status_code=400, detail="Ad ve soyad toplamı 120 karakteri geçemez")
+
+    allowed_name_punctuation = {" ", "-", "'", "’"}
+    if any(
+        not (
+            unicodedata.category(character).startswith(("L", "M"))
+            or character in allowed_name_punctuation
+        )
+        for character in f"{first_name} {last_name}"
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Ad ve soyad yalnızca harf, boşluk, tire veya kesme işareti içerebilir",
+        )
+
+    email_domain = email.rsplit("@", 1)[-1]
+    reserved_domains = {"example.com", "example.net", "example.org"}
+    reserved_suffixes = (".example", ".invalid", ".localhost", ".test")
+    if any(
+        email_domain == reserved_domain
+        or email_domain.endswith(f".{reserved_domain}")
+        for reserved_domain in reserved_domains
+    ) or email_domain.endswith(reserved_suffixes):
+        raise HTTPException(
+            status_code=400,
+            detail="Örnek veya ayrılmış e-posta alan adları kullanılamaz",
+        )
+
+    if password != payload.password_confirmation.strip():
+        raise HTTPException(status_code=400, detail="Şifreler eşleşmiyor")
 
     if len(password) < 8:
         raise HTTPException(status_code=400, detail="Şifre en az 8 karakter olmalıdır")
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(status_code=400, detail="Şifre en az bir büyük harf içermelidir")
+    if not re.search(r"[a-z]", password):
+        raise HTTPException(status_code=400, detail="Şifre en az bir küçük harf içermelidir")
+    if not re.search(r"[0-9]", password):
+        raise HTTPException(status_code=400, detail="Şifre en az bir rakam içermelidir")
+    if not re.search(r"[^A-Za-z0-9\s]", password):
+        raise HTTPException(status_code=400, detail="Şifre en az bir özel karakter içermelidir")
 
     user = User(
         name=name,
@@ -984,9 +1038,9 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
     try:
         db.commit()
         db.refresh(user)
-    except IntegrityError:
+    except IntegrityError as exc:
         db.rollback()
-        raise HTTPException(status_code=409, detail="Bu e-posta zaten kayıtlı")
+        raise HTTPException(status_code=409, detail="Bu e-posta zaten kayıtlı") from exc
 
     token = create_access_token(user.id)
     return {
@@ -1090,10 +1144,14 @@ def change_password(
     if len(payload.new_password.strip()) < 8:
         raise HTTPException(status_code=400, detail="Yeni şifre en az 8 karakter olmalıdır")
 
-    if not verify_password(payload.current_password, current_user.password_hash):
+    user = db.get(User, current_user.id)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Kullanıcı bulunamadı")
+
+    if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status_code=401, detail="Mevcut şifre yanlış")
 
-    current_user.password_hash = hash_password(payload.new_password.strip())
+    user.password_hash = hash_password(payload.new_password.strip())
     db.commit()
     return {"message": "Şifre başarıyla değiştirildi"}
 

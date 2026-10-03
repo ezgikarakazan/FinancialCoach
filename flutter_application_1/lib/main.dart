@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/onboarding_screen.dart';
 import 'screens/main_screen.dart';
@@ -53,11 +54,7 @@ class FinanceCoachApp extends StatelessWidget {
             fontWeight: FontWeight.w700,
             color: ink,
           ),
-          bodyLarge: TextStyle(
-            fontSize: 16,
-            color: ink,
-            height: 1.45,
-          ),
+          bodyLarge: TextStyle(fontSize: 16, color: ink, height: 1.45),
           bodyMedium: TextStyle(
             fontSize: 14,
             color: Color(0xFF53625B),
@@ -135,9 +132,9 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
     String? validToken;
     if (savedToken != null && savedToken.isNotEmpty) {
       try {
-        await ApiService.getMe(token: savedToken).timeout(
-          const Duration(seconds: 5),
-        );
+        await ApiService.getMe(
+          token: savedToken,
+        ).timeout(const Duration(seconds: 5));
         validToken = savedToken;
       } catch (_) {
         await prefs.remove(tokenKey);
@@ -189,9 +186,7 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
-      return const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      );
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
     }
 
     if (!_hasSeenOnboarding) {
@@ -219,15 +214,20 @@ class _AuthScreenState extends State<AuthScreen> {
   bool _isLogin = true;
   bool _loading = false;
 
-  final _nameController = TextEditingController();
+  final _firstNameController = TextEditingController();
+  final _lastNameController = TextEditingController();
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
+  final _passwordConfirmationController = TextEditingController();
+  bool _showPassword = false;
 
   @override
   void dispose() {
-    _nameController.dispose();
+    _firstNameController.dispose();
+    _lastNameController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _passwordConfirmationController.dispose();
     super.dispose();
   }
 
@@ -274,22 +274,35 @@ class _AuthScreenState extends State<AuthScreen> {
 
   Future<void> _submit() async {
     final email = _emailController.text.trim();
-    final password = _passwordController.text.trim();
-    final name = _nameController.text.trim();
+    final password = _passwordController.text;
+    final passwordConfirmation = _passwordConfirmationController.text;
+    final firstName = _firstNameController.text.trim();
+    final lastName = _lastNameController.text.trim();
 
-    if (email.isEmpty || password.isEmpty) {
+    if (email.isEmpty || password.trim().isEmpty) {
       _showMessage("E-posta ve şifre zorunludur");
       return;
     }
 
-    if (!_isLogin && name.isEmpty) {
-      _showMessage("Ad soyad zorunludur");
-      return;
-    }
-
-    if (password.length < 8) {
-      _showMessage("Şifre en az 8 karakter olmalı");
-      return;
+    if (!_isLogin) {
+      if (firstName.isEmpty || lastName.isEmpty) {
+        _showMessage("Ad ve soyad alanları zorunludur");
+        return;
+      }
+      if (_isReservedExampleEmail(email)) {
+        _showMessage("Örnek e-posta alan adlarıyla kayıt yapılamaz");
+        return;
+      }
+      if (password != passwordConfirmation) {
+        _showMessage("Şifreler eşleşmiyor");
+        return;
+      }
+      if (!_hasStrongPassword(password)) {
+        _showMessage(
+          "Şifre 8 karakter; büyük harf, küçük harf, rakam ve sembol içermeli",
+        );
+        return;
+      }
     }
 
     setState(() {
@@ -302,13 +315,15 @@ class _AuthScreenState extends State<AuthScreen> {
       if (_isLogin) {
         response = await ApiService.login(
           email: email,
-          password: password,
+          password: password.trim(),
         );
       } else {
         response = await ApiService.register(
-          name: name,
+          firstName: firstName,
+          lastName: lastName,
           email: email,
           password: password,
+          passwordConfirmation: passwordConfirmation,
         );
       }
 
@@ -318,7 +333,10 @@ class _AuthScreenState extends State<AuthScreen> {
       }
 
       await widget.onAuthenticated(token);
-      _showMessage("Giriş başarılı", error: false);
+      _showMessage(
+        _isLogin ? "Giriş başarılı" : "Hesabın oluşturuldu",
+        error: false,
+      );
     } catch (e) {
       _showMessage(e.toString().replaceFirst("Exception: ", ""));
     } finally {
@@ -330,9 +348,56 @@ class _AuthScreenState extends State<AuthScreen> {
     }
   }
 
+  bool _hasStrongPassword(String password) {
+    return password.length >= 8 &&
+        RegExp(r'[A-Z]').hasMatch(password) &&
+        RegExp(r'[a-z]').hasMatch(password) &&
+        RegExp(r'[0-9]').hasMatch(password) &&
+        RegExp(r'[^A-Za-z0-9\s]').hasMatch(password);
+  }
+
+  bool _isReservedExampleEmail(String email) {
+    final atIndex = email.lastIndexOf('@');
+    if (atIndex < 1) return false;
+
+    final domain = email.substring(atIndex + 1).toLowerCase();
+    const reservedDomains = {'example.com', 'example.net', 'example.org'};
+    const reservedSuffixes = ['.example', '.invalid', '.localhost', '.test'];
+
+    return reservedDomains.any(
+          (reserved) => domain == reserved || domain.endsWith('.$reserved'),
+        ) ||
+        reservedSuffixes.any(domain.endsWith);
+  }
+
+  Widget _passwordRequirement(String label, bool satisfied) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(
+          satisfied ? Icons.check_circle_rounded : Icons.circle_outlined,
+          size: 15,
+          color: satisfied ? const Color(0xFF1E6B52) : const Color(0xFF9AA39D),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 12,
+            color: satisfied
+                ? const Color(0xFF1E6B52)
+                : const Color(0xFF68716B),
+          ),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final password = _passwordController.text;
+    final passwordConfirmation = _passwordConfirmationController.text;
 
     return Scaffold(
       body: Container(
@@ -372,18 +437,49 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Finansal paneline devam etmek için hesap oluştur veya giriş yap.",
+                        _isLogin
+                            ? "Finansal paneline devam etmek için giriş yap."
+                            : "Hesabını oluşturmak için bilgilerini gir.",
                         style: theme.textTheme.bodyMedium,
                       ),
                       const SizedBox(height: 20),
                       if (!_isLogin) ...[
-                        TextField(
-                          controller: _nameController,
-                          textInputAction: TextInputAction.next,
-                          decoration: const InputDecoration(
-                            labelText: "Ad Soyad",
-                            border: OutlineInputBorder(),
-                          ),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _firstNameController,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.deny(
+                                    RegExp(r'[0-9]'),
+                                  ),
+                                ],
+                                textCapitalization: TextCapitalization.words,
+                                textInputAction: TextInputAction.next,
+                                decoration: const InputDecoration(
+                                  labelText: "Ad",
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextField(
+                                controller: _lastNameController,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.deny(
+                                    RegExp(r'[0-9]'),
+                                  ),
+                                ],
+                                textCapitalization: TextCapitalization.words,
+                                textInputAction: TextInputAction.next,
+                                decoration: const InputDecoration(
+                                  labelText: "Soyad",
+                                  border: OutlineInputBorder(),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 14),
                       ],
@@ -399,14 +495,78 @@ class _AuthScreenState extends State<AuthScreen> {
                       const SizedBox(height: 14),
                       TextField(
                         controller: _passwordController,
-                        obscureText: true,
+                        obscureText: !_showPassword,
                         textInputAction: TextInputAction.done,
+                        onChanged: (_) {
+                          if (!_isLogin) setState(() {});
+                        },
                         onSubmitted: (_) => _submit(),
-                        decoration: const InputDecoration(
+                        decoration: InputDecoration(
                           labelText: "Şifre",
-                          border: OutlineInputBorder(),
+                          border: const OutlineInputBorder(),
+                          suffixIcon: IconButton(
+                            tooltip: _showPassword
+                                ? "Şifreyi gizle"
+                                : "Şifreyi göster",
+                            onPressed: () {
+                              setState(() => _showPassword = !_showPassword);
+                            },
+                            icon: Icon(
+                              _showPassword
+                                  ? Icons.visibility_off_outlined
+                                  : Icons.visibility_outlined,
+                            ),
+                          ),
                         ),
                       ),
+                      if (!_isLogin) ...[
+                        const SizedBox(height: 14),
+                        TextField(
+                          controller: _passwordConfirmationController,
+                          obscureText: !_showPassword,
+                          textInputAction: TextInputAction.done,
+                          onChanged: (_) => setState(() {}),
+                          onSubmitted: (_) => _submit(),
+                          decoration: InputDecoration(
+                            labelText: "Şifreyi tekrar gir",
+                            border: const OutlineInputBorder(),
+                            errorText:
+                                passwordConfirmation.isEmpty ||
+                                    passwordConfirmation == password
+                                ? null
+                                : "Şifreler eşleşmiyor",
+                          ),
+                        ),
+                      ],
+                      if (!_isLogin) ...[
+                        const SizedBox(height: 8),
+                        Wrap(
+                          spacing: 16,
+                          runSpacing: 6,
+                          children: [
+                            _passwordRequirement(
+                              '8+ karakter',
+                              password.length >= 8,
+                            ),
+                            _passwordRequirement(
+                              'Büyük harf',
+                              RegExp(r'[A-Z]').hasMatch(password),
+                            ),
+                            _passwordRequirement(
+                              'Küçük harf',
+                              RegExp(r'[a-z]').hasMatch(password),
+                            ),
+                            _passwordRequirement(
+                              'Rakam',
+                              RegExp(r'[0-9]').hasMatch(password),
+                            ),
+                            _passwordRequirement(
+                              'Sembol',
+                              RegExp(r'[^A-Za-z0-9\s]').hasMatch(password),
+                            ),
+                          ],
+                        ),
+                      ],
                       const SizedBox(height: 18),
                       SizedBox(
                         width: double.infinity,

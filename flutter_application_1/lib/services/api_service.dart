@@ -60,14 +60,22 @@ class ApiService {
   }
 
   static Future<Map<String, dynamic>> register({
-    required String name,
+    required String firstName,
+    required String lastName,
     required String email,
     required String password,
+    required String passwordConfirmation,
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/auth/register"),
       headers: await _jsonHeaders(),
-      body: jsonEncode({"name": name, "email": email, "password": password}),
+      body: jsonEncode({
+        "first_name": firstName,
+        "last_name": lastName,
+        "email": email,
+        "password": password,
+        "password_confirmation": passwordConfirmation,
+      }),
     );
 
     if (response.statusCode == 201) {
@@ -127,10 +135,7 @@ class ApiService {
     final response = await http.put(
       Uri.parse("$baseUrl/auth/me"),
       headers: _currentAuthHeaders(),
-      body: jsonEncode({
-        "name": name,
-        "email": email,
-      }),
+      body: jsonEncode({"name": name, "email": email}),
     );
 
     if (response.statusCode == 200) {

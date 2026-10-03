@@ -1,5 +1,4 @@
 from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 DATABASE_URL = "sqlite:///./finance_ai.db"
@@ -165,17 +164,3 @@ def ensure_plan_payment_day_column() -> None:
             text("ALTER TABLE plans ADD COLUMN payment_day INTEGER DEFAULT 1")
         )
 
-
-def test_connection() -> bool:
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-        print("Database connection successful.")
-        return True
-    except SQLAlchemyError as exc:
-        print(f"Database connection failed: {exc}")
-        return False
-
-
-if __name__ == "__main__":
-    raise SystemExit(0 if test_connection() else 1)
