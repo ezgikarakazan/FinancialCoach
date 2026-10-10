@@ -306,55 +306,13 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'Analiz & yatırım',
+                'Analiz',
                 style: theme.textTheme.headlineLarge,
               ),
               const SizedBox(height: 8),
               Text(
-                'Yatırım planları ve harcama analizi tek ekranda görünür.',
+                'Harcama eğilimlerini, kategori dağılımını ve aylık trendi takip et.',
                 style: theme.textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 24),
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(24),
-                decoration: BoxDecoration(
-                  gradient: const LinearGradient(
-                    colors: [Color(0xFF1E6B52), Color(0xFF265E4F)],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(28),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      'Toplam yatırım',
-                      style: TextStyle(color: Colors.white70, fontSize: 14),
-                    ),
-                    const SizedBox(height: 12),
-                    Text(
-                      '₺${_totalInvested.toStringAsFixed(2)}',
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 34,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Row(
-                      children: [
-                        const Icon(Icons.business_center_rounded, color: Colors.white70, size: 20),
-                        const SizedBox(width: 8),
-                        Text(
-                          '${_investments.length} yatırım kaydı',
-                          style: const TextStyle(color: Colors.white70, fontSize: 14),
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
               ),
               const SizedBox(height: 20),
               Container(
@@ -367,207 +325,21 @@ class _AnalyticsScreenState extends State<AnalyticsScreen> {
                 ),
                 child: Row(
                   children: [
-                    Icon(
-                      thisMonthRecord != null ? Icons.check_circle_rounded : Icons.pending_actions_rounded,
-                      color: thisMonthRecord != null ? const Color(0xFF1E6B52) : const Color(0xFFC96B3B),
-                    ),
+                    const Icon(Icons.insights_rounded, color: Color(0xFF1E6B52)),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Text(
-                        thisMonthRecord != null
-                            ? 'Bu ay yatırım yapıldı • ₺${((thisMonthRecord['amount'] as num?)?.toDouble() ?? 0).toStringAsFixed(2)}'
-                            : 'Bu ay yatırım yapılmadı. Hatırlatıcıya göre takip edebilirsin.',
+                        'Yatırım takibi için Yatırım sekmesine geç. Analiz ekranı sadece harcama davranışına odaklanır.',
                         style: const TextStyle(
                           color: Color(0xFF1E2722),
                           fontWeight: FontWeight.w700,
+                          height: 1.5,
                         ),
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: 20),
-              Row(
-                children: [
-                  Expanded(
-                    child: FilledButton.icon(
-                      onPressed: _showAddInvestmentDialog,
-                      icon: const Icon(Icons.add),
-                      label: const Text('Yatırım ekle'),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-              Text(
-                'Yatırım listesi',
-                style: theme.textTheme.headlineMedium,
-              ),
-              const SizedBox(height: 12),
-              if (_loading)
-                const Center(child: CircularProgressIndicator())
-              else if (_investments.isEmpty)
-                Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFFFFCF6),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: const Color(0xFFE9E2D8)),
-                  ),
-                  child: const Text(
-                    'Henüz yatırım kaydı yok. Yatırım hedefini ekleyerek her ay hangi günde yatırım yaptığını tanımlayabilirsin.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(color: Color(0xFF68756E), height: 1.5),
-                  ),
-                )
-              else
-                ..._investments.map((item) {
-                  final title = item['title']?.toString() ?? 'Yatırım';
-                  final type = item['type']?.toString() ?? 'Hisse';
-                  final amount = (item['amount'] as num?)?.toDouble() ?? 0;
-                  final reminderDay = (item['reminder_day'] as num?)?.toInt() ?? 15;
-                  final notes = item['notes']?.toString() ?? '';
-                  final icon = _iconForType(type);
-
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 12),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFFCF6),
-                      borderRadius: BorderRadius.circular(22),
-                      border: Border.all(color: const Color(0xFFE9E2D8)),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        CircleAvatar(
-                          radius: 20,
-                          backgroundColor: const Color(0xFFE7EFEA),
-                          child: Icon(icon, color: const Color(0xFF2F5646)),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: const TextStyle(
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF1E2722),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                '$type • her ayın $reminderDay. günü',
-                                style: const TextStyle(
-                                  color: Color(0xFF68756E),
-                                  fontSize: 12,
-                                ),
-                              ),
-                              if (notes.isNotEmpty) ...[
-                                const SizedBox(height: 6),
-                                Text(
-                                  notes,
-                                  style: const TextStyle(
-                                    color: Color(0xFF5E615B),
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ),
-                        const SizedBox(width: 8),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Text(
-                              '₺${amount.toStringAsFixed(2)}',
-                              style: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                                color: Color(0xFF1E6B52),
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: () => _deleteInvestment(_investments.indexOf(item)),
-                              icon: const Icon(Icons.delete_outline),
-                              color: const Color(0xFFB6542D),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              if (_investmentHistory.isNotEmpty) ...[
-                const SizedBox(height: 28),
-                Text(
-                  'Geçmiş yatırım takibi',
-                  style: theme.textTheme.headlineMedium,
-                ),
-                const SizedBox(height: 12),
-                ..._investmentHistory.take(6).map((item) {
-                  final monthKey = item['month_key']?.toString() ?? '-';
-                  final amount = (item['amount'] as num?)?.toDouble() ?? 0;
-                  final title = item['title']?.toString() ?? 'Yatırım';
-                  return Container(
-                    margin: const EdgeInsets.only(bottom: 10),
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFFCF6),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: const Color(0xFFE9E2D8)),
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 38,
-                          height: 38,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFE7EFEA),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.history_rounded, size: 18, color: Color(0xFF2F5646)),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                title,
-                                style: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w800,
-                                  color: Color(0xFF1E2722),
-                                ),
-                              ),
-                              const SizedBox(height: 4),
-                              Text(
-                                monthKey,
-                                style: const TextStyle(
-                                  color: Color(0xFF68756E),
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Text(
-                          '₺${amount.toStringAsFixed(2)}',
-                          style: const TextStyle(
-                            fontWeight: FontWeight.w800,
-                            color: Color(0xFF1E6B52),
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
               const SizedBox(height: 28),
               Text(
                 'Kategori dağılımı',

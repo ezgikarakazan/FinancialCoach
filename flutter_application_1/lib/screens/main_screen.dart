@@ -3,6 +3,7 @@ import 'dashboard_screen.dart';
 import 'upload_screen.dart';
 import 'transactions_screen.dart';
 import 'plans_screen.dart';
+import 'investment_screen.dart';
 import 'analytics_screen.dart';
 import 'prediction_screen.dart';
 import 'profile_screen.dart';
@@ -27,6 +28,7 @@ class _MainScreenState extends State<MainScreen> {
       const UploadScreen(),
       const TransactionsScreen(),
       const PlansScreen(),
+      const InvestmentScreen(),
       const AnalyticsScreen(),
       const PredictionScreen(),
       ProfilScreen(onLogout: widget.onLogout),
@@ -62,6 +64,11 @@ class _MainScreenState extends State<MainScreen> {
             icon: Icon(Icons.track_changes_outlined),
             selectedIcon: Icon(Icons.track_changes),
             label: "Planlar",
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.savings_outlined),
+            selectedIcon: Icon(Icons.savings),
+            label: "Yatırım",
           ),
           NavigationDestination(
             icon: Icon(Icons.analytics_outlined),

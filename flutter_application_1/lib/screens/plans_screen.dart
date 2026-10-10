@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -39,7 +41,11 @@ class _PlansScreenState extends State<PlansScreen> {
           _reminders.clear();
           for (final item in decoded) {
             if (item is Map) {
-              _reminders.add(Map<String, dynamic>.from(item));
+              final reminder = Map<String, dynamic>.from(item);
+              if (reminder['time'] == null || reminder['time'].toString().trim().isEmpty) {
+                reminder['time'] = '09:00';
+              }
+              _reminders.add(reminder);
             }
           }
         }
@@ -56,6 +62,7 @@ class _PlansScreenState extends State<PlansScreen> {
     final titleController = TextEditingController();
     final amountController = TextEditingController();
     final dayController = TextEditingController(text: '15');
+    final timeController = TextEditingController(text: '09:00');
     final noteController = TextEditingController();
     String type = 'Ödeme';
 
@@ -77,7 +84,7 @@ class _PlansScreenState extends State<PlansScreen> {
                 ),
                 const SizedBox(height: 12),
                 DropdownButtonFormField<String>(
-                  value: type,
+                  initialValue: type,
                   decoration: const InputDecoration(
                     labelText: 'Tür',
                     border: OutlineInputBorder(),
@@ -98,6 +105,16 @@ class _PlansScreenState extends State<PlansScreen> {
                   decoration: const InputDecoration(
                     labelText: 'Hatırlatma günü (1-31)',
                     border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: timeController,
+                  keyboardType: TextInputType.datetime,
+                  decoration: const InputDecoration(
+                    labelText: 'Saat (SS:DD)',
+                    border: OutlineInputBorder(),
+                    hintText: '09:00',
                   ),
                 ),
                 const SizedBox(height: 12),
@@ -139,6 +156,7 @@ class _PlansScreenState extends State<PlansScreen> {
 
     final title = titleController.text.trim();
     final dayText = dayController.text.trim();
+    final timeText = timeController.text.trim();
     final amountText = amountController.text.trim();
     final note = noteController.text.trim();
 
@@ -155,10 +173,17 @@ class _PlansScreenState extends State<PlansScreen> {
     final parsedAmount = double.tryParse(amountText.replaceAll(',', '.'));
     final reminderDay = parsedDay.clamp(1, 31);
 
+    final timeParts = timeText.split(':');
+    final hour = int.tryParse(timeParts.first) ?? 9;
+    final minute = int.tryParse(timeParts.length > 1 ? timeParts[1] : '0') ?? 0;
+    final safeHour = hour.clamp(0, 23);
+    final safeMinute = minute.clamp(0, 59);
+
     final reminder = {
       'title': title,
       'type': type,
       'day': reminderDay,
+      'time': '${safeHour.toString().padLeft(2, '0')}:${safeMinute.toString().padLeft(2, '0')}',
       'amount': parsedAmount ?? 0.0,
       'note': note,
       'enabled': true,
@@ -173,16 +198,27 @@ class _PlansScreenState extends State<PlansScreen> {
         ? '$title ödemesi için ayın $reminderDay. günü yaklaşıyor. Hazırlığınızı kontrol edin.'
         : '$title için para biriktirmeye devam edin. Yatırım gününüz yaklaştı.';
 
-    await InstallmentReminderService.scheduleMonthlyBillReminder(
-      id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-      title: title,
-      reminderDay: reminderDay,
-      customMessage: message,
-    );
+    final notificationSupported = !kIsWeb && !Platform.isWindows;
+    if (notificationSupported) {
+      await InstallmentReminderService.scheduleMonthlyBillReminder(
+        id: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+        title: title,
+        reminderDay: reminderDay,
+        hour: safeHour,
+        minute: safeMinute,
+        customMessage: message,
+      );
+    }
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Hatırlatıcı oluşturuldu.')),
+        SnackBar(
+          content: Text(
+            notificationSupported
+                ? 'Hatırlatıcı oluşturuldu.'
+                : 'Hatırlatıcı kaydedildi. Web tarayıcısında sistem bildirimi gelmez; Android/iOS cihazda görünür.',
+          ),
+        ),
       );
     }
   }
@@ -195,17 +231,27 @@ class _PlansScreenState extends State<PlansScreen> {
   }
 
   Future<void> _refresh() async {
-    _plansFuture = ApiService.getPlans();
-    final plans = await _plansFuture;
+    final plansFuture = ApiService.getPlans();
+
+    if (mounted) {
+      setState(() {
+        _plansFuture = plansFuture;
+      });
+    } else {
+      _plansFuture = plansFuture;
+    }
+
+    final plans = await plansFuture;
     for (final plan in plans) {
       final planMap = plan as Map<String, dynamic>;
       if (planMap['plan_type'] == 'installment') {
         final paymentDay = (planMap['payment_day'] as num?)?.toInt() ?? 1;
+        final planName = planMap['name']?.toString() ?? 'Taksit';
         await InstallmentReminderService.scheduleMonthlyBillReminder(
           id: planMap['id'] as int,
-          title: planMap['name']?.toString() ?? 'Taksit',
+          title: planName,
           reminderDay: paymentDay,
-          customMessage: '${planMap['name']?.toString() ?? 'Taksit'} ödemesi için ayın ${paymentDay}. günü yaklaşıyor. Hazırlığınızı kontrol edin.',
+          customMessage: '$planName ödemesi için ayın $paymentDay. günü yaklaşıyor. Hazırlığınızı kontrol edin.',
         );
       }
     }
@@ -216,7 +262,9 @@ class _PlansScreenState extends State<PlansScreen> {
       context: context,
       builder: (_) => const _CreatePlanDialog(),
     );
-    if (created == true && mounted) setState(_refresh);
+    if (created == true && mounted) {
+      await _refresh();
+    }
   }
 
   Future<void> _addEntry(Map<String, dynamic> plan) async {
@@ -224,7 +272,9 @@ class _PlansScreenState extends State<PlansScreen> {
       context: context,
       builder: (_) => _AddPlanEntryDialog(plan: plan),
     );
-    if (updated == true && mounted) setState(_refresh);
+    if (updated == true && mounted) {
+      await _refresh();
+    }
   }
 
   Future<void> _deletePlan(Map<String, dynamic> plan) async {
@@ -248,13 +298,32 @@ class _PlansScreenState extends State<PlansScreen> {
     if (confirmed != true) return;
     try {
       await ApiService.deletePlan(plan['id'] as int);
-      if (mounted) setState(_refresh);
+      if (mounted) {
+        await _refresh();
+      }
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(error.toString().replaceFirst('Exception: ', ''))),
         );
       }
+    }
+  }
+
+  Future<void> _openPlanDetail(Map<String, dynamic> plan) async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => _PlanDetailPage(
+          plan: plan,
+          onRefresh: _refresh,
+          onDeletePlan: () => _deletePlan(plan),
+          onAddEntry: () => _addEntry(plan),
+        ),
+      ),
+    );
+    if (mounted) {
+      await _refresh();
     }
   }
 
@@ -281,7 +350,7 @@ class _PlansScreenState extends State<PlansScreen> {
                   Text('Planlar & Hatırlatıcılar', style: theme.textTheme.headlineLarge),
                   const SizedBox(height: 8),
                   Text(
-                    'Ödeme tarihlerini ve özel anımsatıcıları tek ekranda yönet.',
+                    'Planları yönet, hatırlatıcıları saatli takip et ve her bir bütçeyi ayrı ayrı izle.',
                     style: theme.textTheme.bodyMedium,
                   ),
                   const SizedBox(height: 18),
@@ -299,7 +368,7 @@ class _PlansScreenState extends State<PlansScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               const Text(
-                                'Özel hatırlatıcılar',
+                                'Hatırlatıcılar',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w800,
@@ -311,8 +380,8 @@ class _PlansScreenState extends State<PlansScreen> {
                                 _loadingReminders
                                     ? 'Yükleniyor...'
                                     : _reminders.isEmpty
-                                        ? 'Plan dışında hatırlatıcı yok.'
-                                        : '${_reminders.length} özel anımsatıcı aktif',
+                                        ? 'Kayıtlı hatırlatıcı yok.'
+                                        : '${_reminders.length} hatırlatıcı aktif',
                                 style: const TextStyle(
                                   color: Color(0xFF68756E),
                                   fontSize: 13,
@@ -340,7 +409,7 @@ class _PlansScreenState extends State<PlansScreen> {
                           border: Border.all(color: const Color(0xFFE4EAE7)),
                         ),
                         child: const Text(
-                          'Özel hatırlatıcı ekleyerek araba taksidi, kira, sigorta veya hedef tarihlerini ayrı ayrı takip edebilirsin.',
+                          'Ödeme, kira, sigorta veya hedef tarihin için saatli hatırlatıcı ekleyebilirsin.',
                           style: TextStyle(color: Color(0xFF5F6F68), height: 1.5),
                         ),
                       )
@@ -351,6 +420,7 @@ class _PlansScreenState extends State<PlansScreen> {
                         final title = reminder['title']?.toString() ?? 'Hatırlatıcı';
                         final type = reminder['type']?.toString() ?? 'Ödeme';
                         final day = (reminder['day'] as num?)?.toInt() ?? 15;
+                        final time = reminder['time']?.toString() ?? '09:00';
                         return Container(
                           margin: const EdgeInsets.only(bottom: 10),
                           padding: const EdgeInsets.all(14),
@@ -389,7 +459,7 @@ class _PlansScreenState extends State<PlansScreen> {
                                     ),
                                     const SizedBox(height: 4),
                                     Text(
-                                      '$type • ayın $day. günü',
+                                      '$type • ayın $day. günü • $time',
                                       style: const TextStyle(
                                         fontSize: 12,
                                         color: Color(0xFF68756E),
@@ -408,12 +478,32 @@ class _PlansScreenState extends State<PlansScreen> {
                         );
                       }),
                   const SizedBox(height: 24),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            'Planlar',
+                            style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+                          ),
+                        ),
+                        if (plans.isNotEmpty)
+                          Text(
+                            '${plans.length} plan',
+                            style: const TextStyle(color: Color(0xFF68756E), fontSize: 13),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   if (plans.isEmpty)
                     const _EmptyPlans()
                   else
                     ...plans.map(
                       (rawPlan) => _PlanCard(
                         plan: rawPlan as Map<String, dynamic>,
+                        onOpenDetail: () => _openPlanDetail(rawPlan),
                         onAddEntry: () => _addEntry(rawPlan),
                         onDelete: () => _deletePlan(rawPlan),
                       ),
@@ -435,10 +525,116 @@ class _PlansScreenState extends State<PlansScreen> {
 
 class _PlanCard extends StatelessWidget {
   final Map<String, dynamic> plan;
+  final VoidCallback onOpenDetail;
   final VoidCallback onAddEntry;
   final VoidCallback onDelete;
 
-  const _PlanCard({required this.plan, required this.onAddEntry, required this.onDelete});
+  const _PlanCard({
+    required this.plan,
+    required this.onOpenDetail,
+    required this.onAddEntry,
+    required this.onDelete,
+  });
+
+  String _money(dynamic value) => '₺${(value as num? ?? 0).toStringAsFixed(2)}';
+
+  @override
+  Widget build(BuildContext context) {
+    final isInstallment = plan['plan_type'] == 'installment';
+    final notes = (plan['notes'] as String? ?? '').trim();
+    final target = (plan['target_amount'] as num? ?? 0).toDouble();
+    final spent = (plan['spent_amount'] as num? ?? 0).toDouble();
+    final progress = target <= 0 ? 0.0 : (spent / target).clamp(0.0, 1.0);
+    final paid = plan['paid_installments'] as num? ?? 0;
+    final total = plan['total_installments'] as num? ?? 0;
+    final color = isInstallment ? const Color(0xFF1E6B52) : const Color(0xFFC96B3B);
+
+    return InkWell(
+      onTap: onOpenDetail,
+      borderRadius: BorderRadius.circular(18),
+      child: Card(
+        margin: const EdgeInsets.only(bottom: 14),
+        elevation: 0,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: Color(0xFFE8DFD3)),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: color.withValues(alpha: 0.12),
+                    child: Icon(isInstallment ? Icons.receipt_long : Icons.savings_outlined, color: color),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      plan['name'].toString(),
+                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                    ),
+                  ),
+                  TextButton.icon(
+                    onPressed: onOpenDetail,
+                    icon: const Icon(Icons.open_in_new_rounded, size: 18),
+                    label: const Text('Detay'),
+                  ),
+                ],
+              ),
+              if (notes.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  notes,
+                  style: const TextStyle(color: Color(0xFF5F6F68), fontSize: 13, height: 1.5),
+                ),
+              ],
+              const SizedBox(height: 18),
+              if (isInstallment) ...[
+                Text('$paid / $total taksit ödendi', style: const TextStyle(fontWeight: FontWeight.w700)),
+                const SizedBox(height: 6),
+                Text('${plan['remaining_installments']} taksit kaldı • Aylık ${_money(plan['monthly_amount'])}', style: const TextStyle(color: Color(0xFF7B887F))),
+                const SizedBox(height: 12),
+                LinearProgressIndicator(value: total == 0 ? 0 : (paid / total).clamp(0, 1).toDouble(), color: color, backgroundColor: const Color(0xFFE8DFD3)),
+              ] else ...[
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  Text('Harcanan ${_money(spent)}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                  Text('Kalan ${_money(plan['remaining_amount'])}', style: TextStyle(color: color, fontWeight: FontWeight.w800)),
+                ]),
+                const SizedBox(height: 10),
+                LinearProgressIndicator(value: progress, color: color, backgroundColor: const Color(0xFFE8DFD3)),
+              ],
+              const SizedBox(height: 18),
+              Align(
+                alignment: Alignment.centerRight,
+                child: FilledButton.tonalIcon(
+                  onPressed: onAddEntry,
+                  icon: Icon(isInstallment ? Icons.check : Icons.add),
+                  label: Text(isInstallment ? 'Taksit ödendi' : 'Harcama ekle'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PlanDetailPage extends StatelessWidget {
+  final Map<String, dynamic> plan;
+  final Future<void> Function() onRefresh;
+  final Future<void> Function() onDeletePlan;
+  final Future<void> Function() onAddEntry;
+
+  const _PlanDetailPage({
+    required this.plan,
+    required this.onRefresh,
+    required this.onDeletePlan,
+    required this.onAddEntry,
+  });
 
   String _money(dynamic value) => '₺${(value as num? ?? 0).toStringAsFixed(2)}';
 
@@ -450,178 +646,173 @@ class _PlanCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final entries = (plan['entries'] as List<dynamic>? ?? const <dynamic>[]).cast<Map<String, dynamic>>();
     final isInstallment = plan['plan_type'] == 'installment';
-    final target = (plan['target_amount'] as num? ?? 0).toDouble();
-    final spent = (plan['spent_amount'] as num? ?? 0).toDouble();
-    final progress = target <= 0 ? 0.0 : (spent / target).clamp(0.0, 1.0);
-    final paid = plan['paid_installments'] as num? ?? 0;
-    final total = plan['total_installments'] as num? ?? 0;
+    final notes = (plan['notes'] as String? ?? '').trim();
     final color = isInstallment ? const Color(0xFF1E6B52) : const Color(0xFFC96B3B);
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 14),
-      elevation: 0,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(18),
-        side: const BorderSide(color: Color(0xFFE8DFD3)),
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(plan['name']?.toString() ?? 'Plan'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: 'Planı sil',
+            onPressed: () async {
+              await onDeletePlan();
+              if (context.mounted) {
+                Navigator.pop(context);
+              }
+            },
+          ),
+        ],
       ),
-      child: Padding(
-        padding: const EdgeInsets.all(18),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
+      body: SafeArea(
+        child: ListView(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 100),
           children: [
-            Row(
-              children: [
-                CircleAvatar(
-                  backgroundColor: color.withValues(alpha: 0.12),
-                  child: Icon(isInstallment ? Icons.receipt_long : Icons.savings_outlined, color: color),
-                ),
-                const SizedBox(width: 12),
-                Expanded(child: Text(plan['name'].toString(), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800))),
-                PopupMenuButton<String>(
-                  onSelected: (value) {
-                    if (value == 'delete') onDelete();
-                  },
-                  itemBuilder: (_) => const [PopupMenuItem(value: 'delete', child: Text('Planı sil'))],
-                ),
-              ],
-            ),
-            const SizedBox(height: 18),
-            if (isInstallment) ...[
-              Text('$paid / $total taksit ödendi', style: const TextStyle(fontWeight: FontWeight.w700)),
-              const SizedBox(height: 6),
-              Text('${plan['remaining_installments']} taksit kaldı • Aylık ${_money(plan['monthly_amount'])}', style: const TextStyle(color: Color(0xFF7B887F))),
-              const SizedBox(height: 12),
-              LinearProgressIndicator(value: total == 0 ? 0 : (paid / total).clamp(0, 1).toDouble(), color: color, backgroundColor: const Color(0xFFE8DFD3)),
-            ] else ...[
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text('Harcanan ${_money(spent)}', style: const TextStyle(fontWeight: FontWeight.w700)),
-                Text('Kalan ${_money(plan['remaining_amount'])}', style: TextStyle(color: color, fontWeight: FontWeight.w800)),
-              ]),
-              const SizedBox(height: 10),
-              LinearProgressIndicator(value: progress, color: color, backgroundColor: const Color(0xFFE8DFD3)),
-            ],
-            const SizedBox(height: 16),
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.tonalIcon(
-                onPressed: onAddEntry,
-                icon: Icon(isInstallment ? Icons.check : Icons.add),
-                label: Text(isInstallment ? 'Taksit ödendi' : 'Harcama ekle'),
+            Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: const Color(0xFFFFFCF6),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: const Color(0xFFE8DFD3)),
               ),
-            ),
-            const SizedBox(height: 4),
-            Theme(
-              data: Theme.of(context).copyWith(
-                dividerColor: Colors.transparent,
-                listTileTheme: const ListTileThemeData(contentPadding: EdgeInsets.zero),
-              ),
-              child: ExpansionTile(
-                tilePadding: EdgeInsets.zero,
-                childrenPadding: const EdgeInsets.only(top: 8, bottom: 4),
-                shape: const RoundedRectangleBorder(side: BorderSide.none),
-                collapsedShape: const RoundedRectangleBorder(side: BorderSide.none),
-                title: Row(
-                  children: [
-                    const Text('Detay', style: TextStyle(fontWeight: FontWeight.w700)),
-                    const Spacer(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      CircleAvatar(
+                        backgroundColor: color.withValues(alpha: 0.12),
+                        child: Icon(isInstallment ? Icons.receipt_long : Icons.savings_outlined, color: color),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          plan['name']?.toString() ?? 'Plan',
+                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  if (notes.isNotEmpty)
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: const Color(0xFFF0F0EA),
-                        borderRadius: BorderRadius.circular(999),
+                        color: const Color(0xFFF8F6F1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: const Color(0xFFE7E0D5)),
                       ),
                       child: Text(
-                        '${(plan['entries'] as List<dynamic>? ?? []).length} kayıt',
-                        style: const TextStyle(fontSize: 12, color: Color(0xFF5E615B)),
+                        notes,
+                        style: const TextStyle(color: Color(0xFF5F6F68), height: 1.5),
                       ),
+                    ),
+                  const SizedBox(height: 18),
+                  if (isInstallment) ...[
+                    Text('${plan['paid_installments']} / ${plan['total_installments']} taksit ödendi', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 6),
+                    Text('${plan['remaining_installments']} taksit kaldı • Aylık ${_money(plan['monthly_amount'])}', style: const TextStyle(color: Color(0xFF7B887F))),
+                  ] else ...[
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text('Harcanan ${_money(plan['spent_amount'])}', style: const TextStyle(fontWeight: FontWeight.w700)),
+                        Text('Kalan ${_money(plan['remaining_amount'])}', style: TextStyle(color: color, fontWeight: FontWeight.w800)),
+                      ],
                     ),
                   ],
-                ),
-                children: [
-                  if ((plan['entries'] as List<dynamic>? ?? []).isEmpty)
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8F6F1),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFE7E0D5)),
-                      ),
-                      child: const Text(
-                        'Henüz harcama eklenmedi.',
-                        style: TextStyle(color: Color(0xFF6D736E)),
-                      ),
-                    )
-                  else
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFF8F6F1),
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: const Color(0xFFE7E0D5)),
-                      ),
-                      child: Column(
-                        children: (plan['entries'] as List<dynamic>).map((rawEntry) {
-                          final entry = rawEntry as Map<String, dynamic>;
-                          final notes = entry['notes']?.toString() ?? '';
-                          final date = _date(entry['date']);
-                          return Padding(
-                            padding: const EdgeInsets.only(bottom: 8),
-                            child: Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Container(
-                                  width: 36,
-                                  height: 36,
-                                  margin: const EdgeInsets.only(right: 10),
-                                  decoration: BoxDecoration(
-                                    color: color.withValues(alpha: 0.12),
-                                    borderRadius: BorderRadius.circular(10),
-                                  ),
-                                  child: Icon(Icons.receipt_long, size: 18, color: color),
-                                ),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        entry['title']?.toString() ?? 'Kayıt',
-                                        style: const TextStyle(
-                                          fontWeight: FontWeight.w700,
-                                          fontSize: 14,
-                                        ),
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        notes.isEmpty ? date : '$date • $notes',
-                                        style: const TextStyle(
-                                          fontSize: 12,
-                                          color: Color(0xFF6D736E),
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                Text(
-                                  _money(entry['amount']),
-                                  style: TextStyle(
-                                    color: color,
-                                    fontWeight: FontWeight.w800,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          );
-                        }).toList(),
-                      ),
-                    ),
                 ],
               ),
             ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Kayıtlar',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800),
+                  ),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () async {
+                    await onAddEntry();
+                    if (context.mounted) {
+                      await onRefresh();
+                    }
+                  },
+                  icon: const Icon(Icons.add),
+                  label: const Text('Ekle'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            if (entries.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(18),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF8F6F1),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFFE7E0D5)),
+                ),
+                child: const Text(
+                  'Henüz harcama eklenmedi.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Color(0xFF6D736E), height: 1.5),
+                ),
+              )
+            else
+              ...entries.map((entry) {
+                final entryNotes = entry['notes']?.toString() ?? '';
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 10),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F6F1),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFFE7E0D5)),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 38,
+                        height: 38,
+                        margin: const EdgeInsets.only(right: 12),
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(11),
+                        ),
+                        child: Icon(Icons.receipt_long, size: 18, color: color),
+                      ),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              entry['title']?.toString() ?? 'Kayıt',
+                              style: const TextStyle(fontWeight: FontWeight.w700),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              entryNotes.isEmpty ? _date(entry['date']) : '${_date(entry['date'])} • $entryNotes',
+                              style: const TextStyle(fontSize: 12, color: Color(0xFF6D736E)),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _money(entry['amount']),
+                        style: TextStyle(color: color, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                );
+              }),
           ],
         ),
       ),

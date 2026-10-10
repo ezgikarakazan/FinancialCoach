@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import 'pdf_history_screen.dart';
 
@@ -26,6 +29,7 @@ class _UploadScreenState extends State<UploadScreen> {
 
   static const List<String> _categories = [
     'Alışveriş',
+    'Yatırım',
     'Eğitim',
     'Eğlence',
     'Yeme İçme',
@@ -243,6 +247,9 @@ class _UploadScreenState extends State<UploadScreen> {
         category: shouldAdd ? tx['category'] as String : null,
         sourceType: shouldAdd ? tx['source_type'] as String : null,
       );
+      if (shouldAdd && tx['category'] == 'Yatırım') {
+        await _saveInvestmentFromTransaction(tx);
+      }
 
       setState(() {
         tx['status'] = status;
@@ -267,6 +274,51 @@ class _UploadScreenState extends State<UploadScreen> {
     } finally {
       if (mounted) setState(() => _isDeciding = false);
     }
+  }
+
+  String _investmentTypeForTitle(String title) {
+    final normalized = title.toLowerCase();
+    if (normalized.contains('altın') || normalized.contains('altin') || normalized.contains('gold')) {
+      return 'Altın';
+    }
+    if (normalized.contains('hisse')) return 'Hisse';
+    if (normalized.contains('fon')) return 'Fon';
+    if (normalized.contains('kripto')) return 'Kripto';
+    if (normalized.contains('döviz') || normalized.contains('doviz')) return 'Döviz';
+    return 'Diğer';
+  }
+
+  Future<void> _saveInvestmentFromTransaction(Map<String, dynamic> tx) async {
+    final prefs = await SharedPreferences.getInstance();
+    final decoded = jsonDecode(prefs.getString('investments_v1') ?? '[]');
+    final investments = decoded is List
+        ? decoded.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList()
+        : <Map<String, dynamic>>[];
+    final uploadId = _currentUploadId!;
+    final itemId = tx['id'] as int;
+    if (investments.any(
+      (investment) =>
+          investment['source_upload_id'] == uploadId &&
+          investment['source_item_id'] == itemId,
+    )) {
+      return;
+    }
+
+    final date = tx['date'] as DateTime;
+    final type = _investmentTypeForTitle(tx['title'] as String);
+    investments.insert(0, {
+      'title': type == 'Altın' ? 'Altın alımı' : tx['title'],
+      'type': type,
+      'amount': (tx['amount'] as num).abs(),
+      'date': date.toIso8601String(),
+      'start_day': 1,
+      'end_day': 31,
+      'reminder_day': date.day,
+      'notes': tx['description']?.toString() ?? '',
+      'source_upload_id': uploadId,
+      'source_item_id': itemId,
+    });
+    await prefs.setString('investments_v1', jsonEncode(investments));
   }
 
   Future<bool> _customizeTransaction(Map<String, dynamic> tx) async {
@@ -443,6 +495,7 @@ class _UploadScreenState extends State<UploadScreen> {
   Color _categoryColor(String category) {
     final colors = {
       'Alışveriş': const Color(0xFF2E6F5E),
+      'Yatırım': const Color(0xFFB88935),
       'Eğitim': const Color(0xFF4E6FAF),
       'Eğlence': const Color(0xFFB8606A),
       'Yeme İçme': const Color(0xFF1E6B52),
@@ -457,6 +510,7 @@ class _UploadScreenState extends State<UploadScreen> {
   IconData _categoryIcon(String category) {
     final icons = {
       'Alışveriş': Icons.shopping_bag_outlined,
+      'Yatırım': Icons.savings_outlined,
       'Eğitim': Icons.school_outlined,
       'Eğlence': Icons.local_movies_outlined,
       'Yeme İçme': Icons.restaurant_outlined,
@@ -841,8 +895,10 @@ class _UploadScreenState extends State<UploadScreen> {
                     ),
                   )
                 else
-                  const Text(
-                    "Bu işlemi eklemek istiyor musun?",
+                  Text(
+                    tx['category'] == 'Yatırım'
+                        ? "Bu işlemi Yatırımlarım'a da eklemek istiyor musun?"
+                        : "Bu işlemi eklemek istiyor musun?",
                     style: TextStyle(
                       fontSize: 14,
                       color: Color(0xFF3D4A44),

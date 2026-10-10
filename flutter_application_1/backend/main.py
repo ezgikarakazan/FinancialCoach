@@ -395,7 +395,7 @@ def extract_pdf_text_with_ocr(file_path: str) -> str:
 
 
 def _parse_statement_date(date_raw: str) -> date | None:
-    cleaned = (date_raw or "").strip()
+    cleaned = (date_raw or "").strip().strip("()[]{}<>,;:")
     if not cleaned:
         return None
 
@@ -448,6 +448,8 @@ def _parse_statement_amount(amount_raw: str) -> float | None:
 def _guess_category(title: str) -> str:
     lower = (title or "").lower()
 
+    if any(k in lower for k in ["gram altın", "gram altin", "altın alış", "altin alis", "gold", "yatırım fonu", "yatirim fonu", "hisse senedi", "kripto alım", "kripto alim", "döviz alım", "doviz alim"]):
+        return "Yatırım"
     if any(k in lower for k in ["market", "migros", "carrefour", "a101", "bim", "şok", "sok", "shop", "trendyol", "hepsiburada", "amazon", "akpos"]):
         return "Alışveriş"
     if any(k in lower for k in ["okul", "üniversite", "universite", "egitim", "eğitim", "kurs", "udemy", "kitap", "yks"]):
@@ -624,13 +626,12 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
 
         date_idx = -1
         tx_date = None
-        for idx, t in enumerate(texts):
-            if _DATE_RE.match(t):
-                maybe = _parse_statement_date(t)
-                if maybe is not None:
-                    tx_date = maybe
-                    date_idx = idx
-                    break
+        for idx, token in enumerate(texts):
+            maybe = _parse_statement_date(token)
+            if maybe is not None:
+                tx_date = maybe
+                date_idx = idx
+                break
 
         if tx_date is None:
             continue
@@ -650,8 +651,7 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
 
         date_word = next(
             word for word in row_words
-            if _DATE_RE.match(word["text"])
-            and _parse_statement_date(word["text"]) is not None
+            if _parse_statement_date(word["text"]) is not None
         )
         amount_words = [
             word for word in row_words
@@ -664,8 +664,7 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
         for following_row_key in row_keys[row_index:]:
             following_words = sorted(rows[following_row_key], key=lambda w: w["x0"])
             if following_row_key != row_key and any(
-                _DATE_RE.match(word["text"])
-                and _parse_statement_date(word["text"]) is not None
+                _parse_statement_date(word["text"]) is not None
                 for word in following_words
             ):
                 break
@@ -674,7 +673,7 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
                 token = word["text"]
                 if not date_word["x0"] < word["x0"] < chosen_amount_word["x0"]:
                     continue
-                if _DATE_RE.match(token) or _PURE_DIGITS_RE.match(token):
+                if _parse_statement_date(token) is not None or _PURE_DIGITS_RE.match(token):
                     continue
                 if _CURRENCY_CODE_RE.match(token):
                     continue

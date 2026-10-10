@@ -55,13 +55,15 @@ class InstallmentReminderService {
   static DateTime _nextReminderDateForDay({
     required int reminderDay,
     required int leadDays,
+    int hour = 9,
+    int minute = 0,
   }) {
     final now = DateTime.now();
     final safeDay = reminderDay.clamp(1, 31);
-    DateTime candidate = DateTime(now.year, now.month, safeDay, 9, 0);
+    DateTime candidate = DateTime(now.year, now.month, safeDay, hour, minute);
 
     if (candidate.isBefore(now)) {
-      candidate = DateTime(now.year, now.month + 1, safeDay, 9, 0);
+      candidate = DateTime(now.year, now.month + 1, safeDay, hour, minute);
     }
 
     final reminderTarget = candidate.subtract(Duration(days: leadDays));
@@ -76,6 +78,8 @@ class InstallmentReminderService {
     required String title,
     required int reminderDay,
     String? customMessage,
+    int hour = 9,
+    int minute = 0,
   }) async {
     if (kIsWeb || Platform.isWindows) {
       return;
@@ -86,7 +90,7 @@ class InstallmentReminderService {
         : '$title için para biriktirmeye devam edin. Yatırım gününüz yaklaştı.';
 
     final scheduledDate = tz.TZDateTime.from(
-      _nextReminderDateForDay(reminderDay: reminderDay, leadDays: 2),
+      _nextReminderDateForDay(reminderDay: reminderDay, leadDays: 2, hour: hour, minute: minute),
       tz.local,
     );
 
@@ -118,6 +122,8 @@ class InstallmentReminderService {
     required String title,
     required int reminderDay,
     String? customMessage,
+    int hour = 9,
+    int minute = 0,
   }) async {
     if (kIsWeb || Platform.isWindows) {
       return;
@@ -137,7 +143,7 @@ class InstallmentReminderService {
           : '$title ödemesi için ayın ${reminderDay.clamp(1, 31)}. günü yaklaşıyor. Hazırlığınızı kontrol edin.';
 
       final scheduledDate = tz.TZDateTime.from(
-        _nextReminderDateForDay(reminderDay: reminderDay, leadDays: leadDays),
+        _nextReminderDateForDay(reminderDay: reminderDay, leadDays: leadDays, hour: hour, minute: minute),
         tz.local,
       );
 
