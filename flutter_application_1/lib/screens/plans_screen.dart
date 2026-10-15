@@ -17,6 +17,7 @@ class PlansScreen extends StatefulWidget {
 
 class _PlansScreenState extends State<PlansScreen> {
   late Future<List<dynamic>> _plansFuture;
+  late Future<List<dynamic>> _categoryBudgetsFuture;
   final List<Map<String, dynamic>> _reminders = [];
   bool _loadingReminders = true;
 
@@ -42,7 +43,8 @@ class _PlansScreenState extends State<PlansScreen> {
           for (final item in decoded) {
             if (item is Map) {
               final reminder = Map<String, dynamic>.from(item);
-              if (reminder['time'] == null || reminder['time'].toString().trim().isEmpty) {
+              if (reminder['time'] == null ||
+                  reminder['time'].toString().trim().isEmpty) {
                 reminder['time'] = '09:00';
               }
               _reminders.add(reminder);
@@ -90,7 +92,10 @@ class _PlansScreenState extends State<PlansScreen> {
                     border: OutlineInputBorder(),
                   ),
                   items: const ['Ödeme', 'Yatırım', 'Hedef']
-                      .map((label) => DropdownMenuItem(value: label, child: Text(label)))
+                      .map(
+                        (label) =>
+                            DropdownMenuItem(value: label, child: Text(label)),
+                      )
                       .toList(),
                   onChanged: (value) {
                     if (value != null) {
@@ -120,7 +125,9 @@ class _PlansScreenState extends State<PlansScreen> {
                 const SizedBox(height: 12),
                 TextField(
                   controller: amountController,
-                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                  keyboardType: const TextInputType.numberWithOptions(
+                    decimal: true,
+                  ),
                   decoration: const InputDecoration(
                     labelText: 'Tutar (isteğe bağlı)',
                     border: OutlineInputBorder(),
@@ -162,9 +169,9 @@ class _PlansScreenState extends State<PlansScreen> {
 
     if (title.isEmpty) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Başlık zorunlu.')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text('Başlık zorunlu.')));
       }
       return;
     }
@@ -183,7 +190,8 @@ class _PlansScreenState extends State<PlansScreen> {
       'title': title,
       'type': type,
       'day': reminderDay,
-      'time': '${safeHour.toString().padLeft(2, '0')}:${safeMinute.toString().padLeft(2, '0')}',
+      'time':
+          '${safeHour.toString().padLeft(2, '0')}:${safeMinute.toString().padLeft(2, '0')}',
       'amount': parsedAmount ?? 0.0,
       'note': note,
       'enabled': true,
@@ -223,6 +231,8 @@ class _PlansScreenState extends State<PlansScreen> {
     }
   }
 
+  String _money(dynamic value) => '₺${(value as num? ?? 0).toStringAsFixed(2)}';
+
   Future<void> _deleteReminder(int index) async {
     setState(() {
       _reminders.removeAt(index);
@@ -232,13 +242,16 @@ class _PlansScreenState extends State<PlansScreen> {
 
   Future<void> _refresh() async {
     final plansFuture = ApiService.getPlans();
+    final categoryBudgetsFuture = ApiService.getCategoryBudgets();
 
     if (mounted) {
       setState(() {
         _plansFuture = plansFuture;
+        _categoryBudgetsFuture = categoryBudgetsFuture;
       });
     } else {
       _plansFuture = plansFuture;
+      _categoryBudgetsFuture = categoryBudgetsFuture;
     }
 
     final plans = await plansFuture;
@@ -251,7 +264,8 @@ class _PlansScreenState extends State<PlansScreen> {
           id: planMap['id'] as int,
           title: planName,
           reminderDay: paymentDay,
-          customMessage: '$planName ödemesi için ayın $paymentDay. günü yaklaşıyor. Hazırlığınızı kontrol edin.',
+          customMessage:
+              '$planName ödemesi için ayın $paymentDay. günü yaklaşıyor. Hazırlığınızı kontrol edin.',
         );
       }
     }
@@ -282,7 +296,9 @@ class _PlansScreenState extends State<PlansScreen> {
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Planı sil'),
-        content: Text('“${plan['name']}” planı ve içindeki kayıtlar silinecek.'),
+        content: Text(
+          '“${plan['name']}” planı ve içindeki kayıtlar silinecek.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(dialogContext, false),
@@ -304,7 +320,9 @@ class _PlansScreenState extends State<PlansScreen> {
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(error.toString().replaceFirst('Exception: ', ''))),
+          SnackBar(
+            content: Text(error.toString().replaceFirst('Exception: ', '')),
+          ),
         );
       }
     }
@@ -339,7 +357,9 @@ class _PlansScreenState extends State<PlansScreen> {
               return const Center(child: CircularProgressIndicator());
             }
             if (snapshot.hasError) {
-              return Center(child: Text('Planlar yüklenemedi: ${snapshot.error}'));
+              return Center(
+                child: Text('Planlar yüklenemedi: ${snapshot.error}'),
+              );
             }
             final plans = snapshot.data ?? [];
             return RefreshIndicator(
@@ -347,11 +367,107 @@ class _PlansScreenState extends State<PlansScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(20, 24, 20, 120),
                 children: [
-                  Text('Planlar & Hatırlatıcılar', style: theme.textTheme.headlineLarge),
+                  Text(
+                    'Planlar & Hatırlatıcılar',
+                    style: theme.textTheme.headlineLarge,
+                  ),
                   const SizedBox(height: 8),
                   Text(
                     'Planları yönet, hatırlatıcıları saatli takip et ve her bir bütçeyi ayrı ayrı izle.',
                     style: theme.textTheme.bodyMedium,
+                  ),
+                  const SizedBox(height: 18),
+                  FutureBuilder<List<dynamic>>(
+                    future: _categoryBudgetsFuture,
+                    builder: (context, budgetSnapshot) {
+                      final budgets = budgetSnapshot.data ?? [];
+                      if (budgets.isEmpty) return const SizedBox.shrink();
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Bu ayın kategori limitleri',
+                            style: theme.textTheme.titleLarge,
+                          ),
+                          const SizedBox(height: 10),
+                          ...budgets.map((rawBudget) {
+                            final budget = Map<String, dynamic>.from(
+                              rawBudget as Map,
+                            );
+                            final spent =
+                                (budget['spent_this_month'] as num?)
+                                    ?.toDouble() ??
+                                0;
+                            final limit =
+                                (budget['monthly_limit'] as num?)?.toDouble() ??
+                                0;
+                            final percent =
+                                (budget['percent_used'] as num?)?.toDouble() ??
+                                0;
+                            return Container(
+                              margin: const EdgeInsets.only(bottom: 10),
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFFFCF6),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: const Color(0xFFE8DFD3),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: Text(
+                                          budget['category']?.toString() ??
+                                              'Kategori',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        '${_money(spent)} / ${_money(limit)}',
+                                        style: const TextStyle(
+                                          color: Color(0xFF68756E),
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 8),
+                                  LinearProgressIndicator(
+                                    value: limit > 0
+                                        ? (spent / limit).clamp(0.0, 1.0)
+                                        : 0,
+                                    color: percent >= 100
+                                        ? const Color(0xFFB04242)
+                                        : percent >=
+                                              ((budget['warning_percent']
+                                                          as num?)
+                                                      ?.toDouble() ??
+                                                  80)
+                                        ? const Color(0xFFC96B3B)
+                                        : const Color(0xFF1E6B52),
+                                    backgroundColor: const Color(0xFFE8DFD3),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${percent.toStringAsFixed(0)}% kullanıldı',
+                                    style: const TextStyle(
+                                      color: Color(0xFF68756E),
+                                      fontSize: 12,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            );
+                          }),
+                        ],
+                      );
+                    },
                   ),
                   const SizedBox(height: 18),
                   Container(
@@ -380,8 +496,8 @@ class _PlansScreenState extends State<PlansScreen> {
                                 _loadingReminders
                                     ? 'Yükleniyor...'
                                     : _reminders.isEmpty
-                                        ? 'Kayıtlı hatırlatıcı yok.'
-                                        : '${_reminders.length} hatırlatıcı aktif',
+                                    ? 'Kayıtlı hatırlatıcı yok.'
+                                    : '${_reminders.length} hatırlatıcı aktif',
                                 style: const TextStyle(
                                   color: Color(0xFF68756E),
                                   fontSize: 13,
@@ -410,14 +526,18 @@ class _PlansScreenState extends State<PlansScreen> {
                         ),
                         child: const Text(
                           'Ödeme, kira, sigorta veya hedef tarihin için saatli hatırlatıcı ekleyebilirsin.',
-                          style: TextStyle(color: Color(0xFF5F6F68), height: 1.5),
+                          style: TextStyle(
+                            color: Color(0xFF5F6F68),
+                            height: 1.5,
+                          ),
                         ),
                       )
                     else
                       ..._reminders.asMap().entries.map((entry) {
                         final index = entry.key;
                         final reminder = entry.value;
-                        final title = reminder['title']?.toString() ?? 'Hatırlatıcı';
+                        final title =
+                            reminder['title']?.toString() ?? 'Hatırlatıcı';
                         final type = reminder['type']?.toString() ?? 'Ödeme';
                         final day = (reminder['day'] as num?)?.toInt() ?? 15;
                         final time = reminder['time']?.toString() ?? '09:00';
@@ -439,8 +559,8 @@ class _PlansScreenState extends State<PlansScreen> {
                                   type == 'Yatırım'
                                       ? Icons.trending_up_rounded
                                       : type == 'Hedef'
-                                          ? Icons.flag_rounded
-                                          : Icons.receipt_long_rounded,
+                                      ? Icons.flag_rounded
+                                      : Icons.receipt_long_rounded,
                                   color: const Color(0xFF2F5646),
                                 ),
                               ),
@@ -479,19 +599,27 @@ class _PlansScreenState extends State<PlansScreen> {
                       }),
                   const SizedBox(height: 24),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 0,
+                    ),
                     child: Row(
                       children: [
                         Expanded(
                           child: Text(
                             'Planlar',
-                            style: theme.textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.w800),
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                            ),
                           ),
                         ),
                         if (plans.isNotEmpty)
                           Text(
                             '${plans.length} plan',
-                            style: const TextStyle(color: Color(0xFF68756E), fontSize: 13),
+                            style: const TextStyle(
+                              color: Color(0xFF68756E),
+                              fontSize: 13,
+                            ),
                           ),
                       ],
                     ),
@@ -542,12 +670,15 @@ class _PlanCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final isInstallment = plan['plan_type'] == 'installment';
     final notes = (plan['notes'] as String? ?? '').trim();
+    final isGoal = notes == 'financial_goal';
     final target = (plan['target_amount'] as num? ?? 0).toDouble();
     final spent = (plan['spent_amount'] as num? ?? 0).toDouble();
     final progress = target <= 0 ? 0.0 : (spent / target).clamp(0.0, 1.0);
     final paid = plan['paid_installments'] as num? ?? 0;
     final total = plan['total_installments'] as num? ?? 0;
-    final color = isInstallment ? const Color(0xFF1E6B52) : const Color(0xFFC96B3B);
+    final color = isInstallment || isGoal
+        ? const Color(0xFF1E6B52)
+        : const Color(0xFFC96B3B);
 
     return InkWell(
       onTap: onOpenDetail,
@@ -568,13 +699,21 @@ class _PlanCard extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     backgroundColor: color.withValues(alpha: 0.12),
-                    child: Icon(isInstallment ? Icons.receipt_long : Icons.savings_outlined, color: color),
+                    child: Icon(
+                      isInstallment
+                          ? Icons.receipt_long
+                          : Icons.savings_outlined,
+                      color: color,
+                    ),
                   ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Text(
                       plan['name'].toString(),
-                      style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                      ),
                     ),
                   ),
                   TextButton.icon(
@@ -584,27 +723,57 @@ class _PlanCard extends StatelessWidget {
                   ),
                 ],
               ),
-              if (notes.isNotEmpty) ...[
+              if (notes.isNotEmpty && !isGoal) ...[
                 const SizedBox(height: 10),
                 Text(
                   notes,
-                  style: const TextStyle(color: Color(0xFF5F6F68), fontSize: 13, height: 1.5),
+                  style: const TextStyle(
+                    color: Color(0xFF5F6F68),
+                    fontSize: 13,
+                    height: 1.5,
+                  ),
                 ),
               ],
               const SizedBox(height: 18),
               if (isInstallment) ...[
-                Text('$paid / $total taksit ödendi', style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(
+                  '$paid / $total taksit ödendi',
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
                 const SizedBox(height: 6),
-                Text('${plan['remaining_installments']} taksit kaldı • Aylık ${_money(plan['monthly_amount'])}', style: const TextStyle(color: Color(0xFF7B887F))),
+                Text(
+                  '${plan['remaining_installments']} taksit kaldı • Aylık ${_money(plan['monthly_amount'])}',
+                  style: const TextStyle(color: Color(0xFF7B887F)),
+                ),
                 const SizedBox(height: 12),
-                LinearProgressIndicator(value: total == 0 ? 0 : (paid / total).clamp(0, 1).toDouble(), color: color, backgroundColor: const Color(0xFFE8DFD3)),
+                LinearProgressIndicator(
+                  value: total == 0 ? 0 : (paid / total).clamp(0, 1).toDouble(),
+                  color: color,
+                  backgroundColor: const Color(0xFFE8DFD3),
+                ),
               ] else ...[
-                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                  Text('Harcanan ${_money(spent)}', style: const TextStyle(fontWeight: FontWeight.w700)),
-                  Text('Kalan ${_money(plan['remaining_amount'])}', style: TextStyle(color: color, fontWeight: FontWeight.w800)),
-                ]),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      '${isGoal ? 'Biriktirilen' : 'Harcanan'} ${_money(spent)}',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    Text(
+                      '${isGoal ? 'Hedefe kalan' : 'Kalan'} ${_money(plan['remaining_amount'])}',
+                      style: TextStyle(
+                        color: color,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
                 const SizedBox(height: 10),
-                LinearProgressIndicator(value: progress, color: color, backgroundColor: const Color(0xFFE8DFD3)),
+                LinearProgressIndicator(
+                  value: progress,
+                  color: color,
+                  backgroundColor: const Color(0xFFE8DFD3),
+                ),
               ],
               const SizedBox(height: 18),
               Align(
@@ -612,7 +781,13 @@ class _PlanCard extends StatelessWidget {
                 child: FilledButton.tonalIcon(
                   onPressed: onAddEntry,
                   icon: Icon(isInstallment ? Icons.check : Icons.add),
-                  label: Text(isInstallment ? 'Taksit ödendi' : 'Harcama ekle'),
+                  label: Text(
+                    isInstallment
+                        ? 'Taksit ödendi'
+                        : isGoal
+                        ? 'Birikim ekle'
+                        : 'Harcama ekle',
+                  ),
                 ),
               ),
             ],
@@ -640,16 +815,21 @@ class _PlanDetailPage extends StatelessWidget {
 
   String _date(dynamic value) {
     final text = value?.toString() ?? '';
-    if (text.length >= 10) return text.substring(0, 10).split('-').reversed.join('.');
+    if (text.length >= 10)
+      return text.substring(0, 10).split('-').reversed.join('.');
     return text;
   }
 
   @override
   Widget build(BuildContext context) {
-    final entries = (plan['entries'] as List<dynamic>? ?? const <dynamic>[]).cast<Map<String, dynamic>>();
+    final entries = (plan['entries'] as List<dynamic>? ?? const <dynamic>[])
+        .cast<Map<String, dynamic>>();
     final isInstallment = plan['plan_type'] == 'installment';
     final notes = (plan['notes'] as String? ?? '').trim();
-    final color = isInstallment ? const Color(0xFF1E6B52) : const Color(0xFFC96B3B);
+    final isGoal = notes == 'financial_goal';
+    final color = isInstallment || isGoal
+        ? const Color(0xFF1E6B52)
+        : const Color(0xFFC96B3B);
 
     return Scaffold(
       appBar: AppBar(
@@ -685,19 +865,27 @@ class _PlanDetailPage extends StatelessWidget {
                     children: [
                       CircleAvatar(
                         backgroundColor: color.withValues(alpha: 0.12),
-                        child: Icon(isInstallment ? Icons.receipt_long : Icons.savings_outlined, color: color),
+                        child: Icon(
+                          isInstallment
+                              ? Icons.receipt_long
+                              : Icons.savings_outlined,
+                          color: color,
+                        ),
                       ),
                       const SizedBox(width: 12),
                       Expanded(
                         child: Text(
                           plan['name']?.toString() ?? 'Plan',
-                          style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
+                          style: const TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
                       ),
                     ],
                   ),
                   const SizedBox(height: 14),
-                  if (notes.isNotEmpty)
+                  if (notes.isNotEmpty && !isGoal)
                     Container(
                       width: double.infinity,
                       padding: const EdgeInsets.all(12),
@@ -708,20 +896,38 @@ class _PlanDetailPage extends StatelessWidget {
                       ),
                       child: Text(
                         notes,
-                        style: const TextStyle(color: Color(0xFF5F6F68), height: 1.5),
+                        style: const TextStyle(
+                          color: Color(0xFF5F6F68),
+                          height: 1.5,
+                        ),
                       ),
                     ),
                   const SizedBox(height: 18),
                   if (isInstallment) ...[
-                    Text('${plan['paid_installments']} / ${plan['total_installments']} taksit ödendi', style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text(
+                      '${plan['paid_installments']} / ${plan['total_installments']} taksit ödendi',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
                     const SizedBox(height: 6),
-                    Text('${plan['remaining_installments']} taksit kaldı • Aylık ${_money(plan['monthly_amount'])}', style: const TextStyle(color: Color(0xFF7B887F))),
+                    Text(
+                      '${plan['remaining_installments']} taksit kaldı • Aylık ${_money(plan['monthly_amount'])}',
+                      style: const TextStyle(color: Color(0xFF7B887F)),
+                    ),
                   ] else ...[
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text('Harcanan ${_money(plan['spent_amount'])}', style: const TextStyle(fontWeight: FontWeight.w700)),
-                        Text('Kalan ${_money(plan['remaining_amount'])}', style: TextStyle(color: color, fontWeight: FontWeight.w800)),
+                        Text(
+                          '${isGoal ? 'Biriktirilen' : 'Harcanan'} ${_money(plan['spent_amount'])}',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                        Text(
+                          '${isGoal ? 'Hedefe kalan' : 'Kalan'} ${_money(plan['remaining_amount'])}',
+                          style: TextStyle(
+                            color: color,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -745,7 +951,7 @@ class _PlanDetailPage extends StatelessWidget {
                     }
                   },
                   icon: const Icon(Icons.add),
-                  label: const Text('Ekle'),
+                  label: Text(isGoal ? 'Birikim ekle' : 'Ekle'),
                 ),
               ],
             ),
@@ -758,8 +964,10 @@ class _PlanDetailPage extends StatelessWidget {
                   borderRadius: BorderRadius.circular(16),
                   border: Border.all(color: const Color(0xFFE7E0D5)),
                 ),
-                child: const Text(
-                  'Henüz harcama eklenmedi.',
+                child: Text(
+                  isGoal
+                      ? 'Henüz birikim eklenmedi.'
+                      : 'Henüz harcama eklenmedi.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Color(0xFF6D736E), height: 1.5),
                 ),
@@ -794,12 +1002,19 @@ class _PlanDetailPage extends StatelessWidget {
                           children: [
                             Text(
                               entry['title']?.toString() ?? 'Kayıt',
-                              style: const TextStyle(fontWeight: FontWeight.w700),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                             const SizedBox(height: 4),
                             Text(
-                              entryNotes.isEmpty ? _date(entry['date']) : '${_date(entry['date'])} • $entryNotes',
-                              style: const TextStyle(fontSize: 12, color: Color(0xFF6D736E)),
+                              entryNotes.isEmpty
+                                  ? _date(entry['date'])
+                                  : '${_date(entry['date'])} • $entryNotes',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF6D736E),
+                              ),
                             ),
                           ],
                         ),
@@ -807,7 +1022,10 @@ class _PlanDetailPage extends StatelessWidget {
                       const SizedBox(width: 8),
                       Text(
                         _money(entry['amount']),
-                        style: TextStyle(color: color, fontWeight: FontWeight.w800),
+                        style: TextStyle(
+                          color: color,
+                          fontWeight: FontWeight.w800,
+                        ),
                       ),
                     ],
                   ),
@@ -826,14 +1044,26 @@ class _EmptyPlans extends StatelessWidget {
   @override
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.all(24),
-    decoration: BoxDecoration(color: const Color(0xFFFFFCF6), borderRadius: BorderRadius.circular(18), border: Border.all(color: const Color(0xFFE8DFD3))),
-    child: const Column(children: [
-      Icon(Icons.track_changes_outlined, size: 42, color: Color(0xFF1E6B52)),
-      SizedBox(height: 12),
-      Text('Henüz planın yok', style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-      SizedBox(height: 6),
-      Text('Bir taksit veya bütçe hedefi oluşturarak başlayabilirsin.', textAlign: TextAlign.center),
-    ]),
+    decoration: BoxDecoration(
+      color: const Color(0xFFFFFCF6),
+      borderRadius: BorderRadius.circular(18),
+      border: Border.all(color: const Color(0xFFE8DFD3)),
+    ),
+    child: const Column(
+      children: [
+        Icon(Icons.track_changes_outlined, size: 42, color: Color(0xFF1E6B52)),
+        SizedBox(height: 12),
+        Text(
+          'Henüz planın yok',
+          style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800),
+        ),
+        SizedBox(height: 6),
+        Text(
+          'Bir taksit veya bütçe hedefi oluşturarak başlayabilirsin.',
+          textAlign: TextAlign.center,
+        ),
+      ],
+    ),
   );
 }
 
@@ -857,7 +1087,15 @@ class _CreatePlanDialogState extends State<_CreatePlanDialog> {
 
   @override
   void dispose() {
-    for (final controller in [name, target, monthly, total, paid, paymentDay, notes]) {
+    for (final controller in [
+      name,
+      target,
+      monthly,
+      total,
+      paid,
+      paymentDay,
+      notes,
+    ]) {
       controller.dispose();
     }
     super.dispose();
@@ -865,17 +1103,35 @@ class _CreatePlanDialogState extends State<_CreatePlanDialog> {
 
   Future<void> _submit() async {
     final targetAmount = double.tryParse(target.text.replaceAll(',', '.')) ?? 0;
-    final monthlyAmount = double.tryParse(monthly.text.replaceAll(',', '.')) ?? 0;
+    final monthlyAmount =
+        double.tryParse(monthly.text.replaceAll(',', '.')) ?? 0;
     final totalInstallments = int.tryParse(total.text) ?? 0;
     final paidInstallments = int.tryParse(paid.text) ?? 0;
     final installmentDay = int.tryParse(paymentDay.text) ?? 1;
-    if (name.text.trim().isEmpty || (type == 'budget' && targetAmount <= 0) || (type == 'installment' && (totalInstallments <= 0 || monthlyAmount <= 0))) return;
+    if (name.text.trim().isEmpty ||
+        (type == 'budget' && targetAmount <= 0) ||
+        (type == 'installment' &&
+            (totalInstallments <= 0 || monthlyAmount <= 0)))
+      return;
     setState(() => saving = true);
     try {
-      await ApiService.createPlan(name: name.text.trim(), planType: type, targetAmount: targetAmount, monthlyAmount: monthlyAmount, totalInstallments: totalInstallments, paidInstallments: paidInstallments, paymentDay: installmentDay, startDate: DateTime.now(), notes: notes.text.trim());
+      await ApiService.createPlan(
+        name: name.text.trim(),
+        planType: type,
+        targetAmount: targetAmount,
+        monthlyAmount: monthlyAmount,
+        totalInstallments: totalInstallments,
+        paidInstallments: paidInstallments,
+        paymentDay: installmentDay,
+        startDate: DateTime.now(),
+        notes: notes.text.trim(),
+      );
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       setState(() => saving = false);
     }
   }
@@ -883,20 +1139,82 @@ class _CreatePlanDialogState extends State<_CreatePlanDialog> {
   @override
   Widget build(BuildContext context) => AlertDialog(
     title: const Text('Yeni plan'),
-    content: SingleChildScrollView(child: Column(mainAxisSize: MainAxisSize.min, children: [
-      SegmentedButton<String>(segments: const [ButtonSegment(value: 'budget', label: Text('Bütçe')), ButtonSegment(value: 'installment', label: Text('Taksit'))], selected: {type}, onSelectionChanged: (value) => setState(() => type = value.first)),
-      const SizedBox(height: 16),
-      TextField(controller: name, decoration: const InputDecoration(labelText: 'Plan adı', hintText: 'Örn. Antalya tatili')),
-      if (type == 'budget') TextField(controller: target, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Toplam bütçe (₺)')),
-      if (type == 'installment') ...[
-        TextField(controller: monthly, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Aylık taksit (₺)')),
-        TextField(controller: total, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Toplam taksit sayısı')),
-        TextField(controller: paid, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Daha önce ödenen taksit')),
-        TextField(controller: paymentDay, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Ödeme günü (1-31)')),
-      ],
-      TextField(controller: notes, maxLines: 2, decoration: const InputDecoration(labelText: 'Not (opsiyonel)')),
-    ])),
-    actions: [TextButton(onPressed: saving ? null : () => Navigator.pop(context), child: const Text('Vazgeç')), FilledButton(onPressed: saving ? null : _submit, child: saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Oluştur'))],
+    content: SingleChildScrollView(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'budget', label: Text('Bütçe')),
+              ButtonSegment(value: 'installment', label: Text('Taksit')),
+            ],
+            selected: {type},
+            onSelectionChanged: (value) => setState(() => type = value.first),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: name,
+            decoration: const InputDecoration(
+              labelText: 'Plan adı',
+              hintText: 'Örn. Antalya tatili',
+            ),
+          ),
+          if (type == 'budget')
+            TextField(
+              controller: target,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Toplam bütçe (₺)'),
+            ),
+          if (type == 'installment') ...[
+            TextField(
+              controller: monthly,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Aylık taksit (₺)'),
+            ),
+            TextField(
+              controller: total,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Toplam taksit sayısı',
+              ),
+            ),
+            TextField(
+              controller: paid,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(
+                labelText: 'Daha önce ödenen taksit',
+              ),
+            ),
+            TextField(
+              controller: paymentDay,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Ödeme günü (1-31)'),
+            ),
+          ],
+          TextField(
+            controller: notes,
+            maxLines: 2,
+            decoration: const InputDecoration(labelText: 'Not (opsiyonel)'),
+          ),
+        ],
+      ),
+    ),
+    actions: [
+      TextButton(
+        onPressed: saving ? null : () => Navigator.pop(context),
+        child: const Text('Vazgeç'),
+      ),
+      FilledButton(
+        onPressed: saving ? null : _submit,
+        child: saving
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Oluştur'),
+      ),
+    ],
   );
 }
 
@@ -915,29 +1233,88 @@ class _AddPlanEntryDialogState extends State<_AddPlanEntryDialog> {
   bool saving = false;
 
   @override
-  void dispose() { title.dispose(); amount.dispose(); notes.dispose(); super.dispose(); }
+  void dispose() {
+    title.dispose();
+    amount.dispose();
+    notes.dispose();
+    super.dispose();
+  }
 
   Future<void> _submit() async {
     final value = double.tryParse(amount.text.replaceAll(',', '.')) ?? 0;
     if (title.text.trim().isEmpty || value <= 0) return;
     setState(() => saving = true);
     try {
-      await ApiService.addPlanEntry(planId: widget.plan['id'] as int, title: title.text.trim(), amount: value, date: DateTime.now(), notes: notes.text.trim());
+      await ApiService.addPlanEntry(
+        planId: widget.plan['id'] as int,
+        title: title.text.trim(),
+        amount: value,
+        date: DateTime.now(),
+        notes: notes.text.trim(),
+      );
       if (mounted) Navigator.pop(context, true);
     } catch (error) {
-      if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(error.toString())));
+      if (mounted)
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(error.toString())));
       setState(() => saving = false);
     }
   }
 
   @override
   Widget build(BuildContext context) => AlertDialog(
-    title: Text(widget.plan['plan_type'] == 'installment' ? 'Taksit ödemesi ekle' : 'Bütçe harcaması ekle'),
-    content: Column(mainAxisSize: MainAxisSize.min, children: [
-      TextField(controller: title, decoration: InputDecoration(labelText: widget.plan['plan_type'] == 'installment' ? 'Ödeme adı' : 'Harcama adı', hintText: widget.plan['plan_type'] == 'installment' ? 'Örn. Eylül taksidi' : 'Örn. Otel')),
-      TextField(controller: amount, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Tutar (₺)')),
-      TextField(controller: notes, decoration: const InputDecoration(labelText: 'Not (opsiyonel)')),
-    ]),
-    actions: [TextButton(onPressed: saving ? null : () => Navigator.pop(context), child: const Text('Vazgeç')), FilledButton(onPressed: saving ? null : _submit, child: saving ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2)) : const Text('Kaydet'))],
+    title: Text(
+      widget.plan['plan_type'] == 'installment'
+          ? 'Taksit ödemesi ekle'
+          : widget.plan['notes'] == 'financial_goal'
+          ? 'Birikim ekle'
+          : 'Bütçe harcaması ekle',
+    ),
+    content: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextField(
+          controller: title,
+          decoration: InputDecoration(
+            labelText: widget.plan['plan_type'] == 'installment'
+                ? 'Ödeme adı'
+                : widget.plan['notes'] == 'financial_goal'
+                ? 'Birikim açıklaması'
+                : 'Harcama adı',
+            hintText: widget.plan['plan_type'] == 'installment'
+                ? 'Örn. Eylül taksidi'
+                : widget.plan['notes'] == 'financial_goal'
+                ? 'Örn. Bu ay eklediğim tutar'
+                : 'Örn. Otel',
+          ),
+        ),
+        TextField(
+          controller: amount,
+          keyboardType: TextInputType.number,
+          decoration: const InputDecoration(labelText: 'Tutar (₺)'),
+        ),
+        TextField(
+          controller: notes,
+          decoration: const InputDecoration(labelText: 'Not (opsiyonel)'),
+        ),
+      ],
+    ),
+    actions: [
+      TextButton(
+        onPressed: saving ? null : () => Navigator.pop(context),
+        child: const Text('Vazgeç'),
+      ),
+      FilledButton(
+        onPressed: saving ? null : _submit,
+        child: saving
+            ? const SizedBox(
+                width: 18,
+                height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            : const Text('Kaydet'),
+      ),
+    ],
   );
 }

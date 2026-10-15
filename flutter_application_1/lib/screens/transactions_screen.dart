@@ -28,7 +28,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text("İşlemi sil"),
-        content: const Text("Bu işlem kalıcı olarak silinecek. Devam etmek istiyor musun?"),
+        content: const Text(
+          "Bu işlem kalıcı olarak silinecek. Devam etmek istiyor musun?",
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
@@ -36,7 +38,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB04242)),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFB04242),
+            ),
             child: const Text("Sil"),
           ),
         ],
@@ -49,9 +53,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
       await ApiService.deleteTransaction(id);
       _refreshTransactions();
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("İşlem silindi")),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text("İşlem silindi")));
       }
     } catch (e) {
       if (mounted) {
@@ -62,7 +66,10 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     }
   }
 
-  void _showTransactionDialog(BuildContext context, {Map<String, dynamic>? existing}) {
+  void _showTransactionDialog(
+    BuildContext context, {
+    Map<String, dynamic>? existing,
+  }) {
     final isEdit = existing != null;
 
     final existingAmount = isEdit
@@ -75,11 +82,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
     final amountController = TextEditingController(
       text: isEdit ? existingAmount.abs().toStringAsFixed(2) : '',
     );
-    String selectedCategory = isEdit && _categories.contains(existing['category'])
+    String selectedCategory =
+        isEdit && _categories.contains(existing['category'])
         ? existing['category'] as String
         : 'Yeme İçme';
     DateTime selectedDate = isEdit
-        ? (DateTime.tryParse(existing['date']?.toString() ?? '') ?? DateTime.now())
+        ? (DateTime.tryParse(existing['date']?.toString() ?? '') ??
+              DateTime.now())
         : DateTime.now();
     bool isExpense = isEdit ? existingAmount < 0 : true;
 
@@ -144,10 +153,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                             child: ChoiceChip(
                               label: const Text("Gider"),
                               selected: isExpense,
-                              onSelected: (_) => setStateDialog(() => isExpense = true),
-                              selectedColor: const Color(0xFFB04242).withOpacity(0.16),
+                              onSelected: (_) =>
+                                  setStateDialog(() => isExpense = true),
+                              selectedColor: const Color(
+                                0xFFB04242,
+                              ).withOpacity(0.16),
                               labelStyle: TextStyle(
-                                color: isExpense ? const Color(0xFFB04242) : const Color(0xFF64716B),
+                                color: isExpense
+                                    ? const Color(0xFFB04242)
+                                    : const Color(0xFF64716B),
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -157,10 +171,15 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                             child: ChoiceChip(
                               label: const Text("Gelir"),
                               selected: !isExpense,
-                              onSelected: (_) => setStateDialog(() => isExpense = false),
-                              selectedColor: const Color(0xFF1E6B52).withOpacity(0.16),
+                              onSelected: (_) =>
+                                  setStateDialog(() => isExpense = false),
+                              selectedColor: const Color(
+                                0xFF1E6B52,
+                              ).withOpacity(0.16),
                               labelStyle: TextStyle(
-                                color: !isExpense ? const Color(0xFF1E6B52) : const Color(0xFF64716B),
+                                color: !isExpense
+                                    ? const Color(0xFF1E6B52)
+                                    : const Color(0xFF64716B),
                                 fontWeight: FontWeight.w700,
                               ),
                             ),
@@ -173,16 +192,25 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         decoration: InputDecoration(
                           border: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: Color(0xFFE8DFD3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFE8DFD3),
+                            ),
                           ),
                           enabledBorder: OutlineInputBorder(
                             borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: Color(0xFFE8DFD3)),
+                            borderSide: const BorderSide(
+                              color: Color(0xFFE8DFD3),
+                            ),
                           ),
                           contentPadding: const EdgeInsets.all(14),
                         ),
                         items: _categories
-                            .map((cat) => DropdownMenuItem(value: cat, child: Text(cat)))
+                            .map(
+                              (cat) => DropdownMenuItem(
+                                value: cat,
+                                child: Text(cat),
+                              ),
+                            )
                             .toList(),
                         onChanged: (val) {
                           if (val != null) {
@@ -212,7 +240,11 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           ),
                           child: Row(
                             children: [
-                              const Icon(Icons.calendar_today_outlined, size: 18, color: Color(0xFF7B887F)),
+                              const Icon(
+                                Icons.calendar_today_outlined,
+                                size: 18,
+                                color: Color(0xFF7B887F),
+                              ),
                               const SizedBox(width: 10),
                               Text(
                                 "${selectedDate.day.toString().padLeft(2, '0')}.${selectedDate.month.toString().padLeft(2, '0')}.${selectedDate.year}",
@@ -238,7 +270,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           style: OutlinedButton.styleFrom(
                             foregroundColor: const Color(0xFFB04242),
                             side: const BorderSide(color: Color(0xFFE8DFD3)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                             padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                           child: const Text("Sil"),
@@ -250,7 +284,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                           onPressed: () => Navigator.pop(ctx),
                           style: OutlinedButton.styleFrom(
                             side: const BorderSide(color: Color(0xFFE8DFD3)),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
                             padding: const EdgeInsets.symmetric(vertical: 12),
                           ),
                           child: const Text("İptal"),
@@ -260,17 +296,23 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                     Expanded(
                       child: FilledButton(
                         onPressed: () async {
-                          if (titleController.text.isEmpty || amountController.text.isEmpty) {
+                          if (titleController.text.isEmpty ||
+                              amountController.text.isEmpty) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Tüm alanları doldur")),
+                              const SnackBar(
+                                content: Text("Tüm alanları doldur"),
+                              ),
                             );
                             return;
                           }
 
-                          final amount = double.tryParse(amountController.text) ?? 0;
+                          final amount =
+                              double.tryParse(amountController.text) ?? 0;
                           if (amount <= 0) {
                             ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(content: Text("Tutar 0'dan büyük olmalı")),
+                              const SnackBar(
+                                content: Text("Tutar 0'dan büyük olmalı"),
+                              ),
                             );
                             return;
                           }
@@ -298,7 +340,13 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               Navigator.pop(ctx);
                               _refreshTransactions();
                               ScaffoldMessenger.of(context).showSnackBar(
-                                SnackBar(content: Text(isEdit ? "İşlem güncellendi" : "İşlem eklendi")),
+                                SnackBar(
+                                  content: Text(
+                                    isEdit
+                                        ? "İşlem güncellendi"
+                                        : "İşlem eklendi",
+                                  ),
+                                ),
                               );
                             }
                           } catch (e) {
@@ -311,7 +359,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                         },
                         style: FilledButton.styleFrom(
                           backgroundColor: const Color(0xFF1E6B52),
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                           padding: const EdgeInsets.symmetric(vertical: 12),
                         ),
                         child: Text(isEdit ? "Kaydet" : "Ekle"),
@@ -388,9 +438,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
           }
 
           if (snapshot.hasError) {
-            return _TransactionsErrorState(
-              onRetry: _refreshTransactions,
-            );
+            return _TransactionsErrorState(onRetry: _refreshTransactions);
           }
 
           final transactions = snapshot.data ?? [];
@@ -403,10 +451,7 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        "İşlemler",
-                        style: theme.textTheme.headlineLarge,
-                      ),
+                      Text("İşlemler", style: theme.textTheme.headlineLarge),
                       const SizedBox(height: 10),
                       Text(
                         "${transactions.length} işlem kaydı",
@@ -432,39 +477,58 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                               padding: const EdgeInsets.only(bottom: 12),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(20),
-                                onTap: () => _showTransactionDialog(context, existing: tx),
+                                onTap: () => _showTransactionDialog(
+                                  context,
+                                  existing: tx,
+                                ),
                                 child: Container(
                                   padding: const EdgeInsets.all(16),
                                   decoration: BoxDecoration(
                                     color: const Color(0xFFFFFCF6),
                                     borderRadius: BorderRadius.circular(20),
-                                    border: Border.all(color: const Color(0xFFE8DFD3)),
+                                    border: Border.all(
+                                      color: const Color(0xFFE8DFD3),
+                                    ),
                                   ),
                                   child: Row(
                                     children: [
                                       CircleAvatar(
                                         radius: 20,
-                                        backgroundColor: _categoryColor(tx['category'] ?? 'Diğer').withOpacity(0.12),
+                                        backgroundColor: _categoryColor(
+                                          tx['category'] ?? 'Diğer',
+                                        ).withOpacity(0.12),
                                         child: Icon(
-                                          _categoryIcon(tx['category'] ?? 'Diğer'),
-                                          color: _categoryColor(tx['category'] ?? 'Diğer'),
+                                          _categoryIcon(
+                                            tx['category'] ?? 'Diğer',
+                                          ),
+                                          color: _categoryColor(
+                                            tx['category'] ?? 'Diğer',
+                                          ),
                                           size: 20,
                                         ),
                                       ),
                                       const SizedBox(width: 14),
                                       Expanded(
                                         child: Column(
-                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
                                             Text(
-                                              tx['title']?.toString() ?? 'İşlem',
+                                              tx['title']?.toString() ??
+                                                  'İşlem',
+                                              maxLines: 2,
+                                              overflow: TextOverflow.ellipsis,
                                               style: const TextStyle(
                                                 fontWeight: FontWeight.w700,
                                                 fontSize: 15,
                                                 color: Color(0xFF1E2722),
                                               ),
                                             ),
-                                            if ((tx['description']?.toString().trim() ?? '').isNotEmpty) ...[
+                                            if ((tx['description']
+                                                        ?.toString()
+                                                        .trim() ??
+                                                    '')
+                                                .isNotEmpty) ...[
                                               const SizedBox(height: 2),
                                               Text(
                                                 tx['description'].toString(),
@@ -478,7 +542,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                             ],
                                             const SizedBox(height: 4),
                                             Text(
-                                              _formatDate(tx['date']?.toString() ?? ''),
+                                              _formatDate(
+                                                tx['date']?.toString() ?? '',
+                                              ),
                                               style: const TextStyle(
                                                 fontSize: 12,
                                                 color: Color(0xFF7B887F),
@@ -492,7 +558,9 @@ class _TransactionsScreenState extends State<TransactionsScreen> {
                                         style: TextStyle(
                                           fontWeight: FontWeight.w800,
                                           fontSize: 16,
-                                          color: isIncome ? const Color(0xFF1E6B52) : const Color(0xFFB04242),
+                                          color: isIncome
+                                              ? const Color(0xFF1E6B52)
+                                              : const Color(0xFFB04242),
                                         ),
                                       ),
                                       const SizedBox(width: 4),
@@ -557,10 +625,7 @@ class _EmptyTransactionsBlock extends StatelessWidget {
               const Text(
                 "İlk işlemini eklemek için aşağıdaki butona tıkla.",
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF64716B),
-                  height: 1.45,
-                ),
+                style: TextStyle(color: Color(0xFF64716B), height: 1.45),
               ),
             ],
           ),
@@ -575,9 +640,7 @@ class _TransactionsLoadingState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: CircularProgressIndicator(),
-    );
+    return const Center(child: CircularProgressIndicator());
   }
 }
 
@@ -609,27 +672,26 @@ class _TransactionsErrorState extends StatelessWidget {
               const SizedBox(height: 14),
               const Text(
                 "Bir hata oluştu",
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
               ),
               const SizedBox(height: 8),
               const Text(
                 "İşlemler yüklenirken hata. Lütfen tekrar dene.",
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  color: Color(0xFF5B6761),
-                  height: 1.45,
-                ),
+                style: TextStyle(color: Color(0xFF5B6761), height: 1.45),
               ),
               const SizedBox(height: 20),
               FilledButton(
                 onPressed: onRetry,
                 style: FilledButton.styleFrom(
                   backgroundColor: const Color(0xFF1E6B52),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 24,
+                    vertical: 12,
+                  ),
                 ),
                 child: const Text("Tekrar Dene"),
               ),

@@ -1,8 +1,127 @@
-import 'package:flutter/material.dart';
-import '../services/api_service.dart';
+import 'dart:convert';
 
-class DashboardScreen extends StatelessWidget {
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../services/api_service.dart';
+import 'financial_setup_screen.dart';
+
+class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
+
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
+  late Future<Map<String, dynamic>> _dashboardFuture;
+  late Future<Map<String, dynamic>> _setupOverviewFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _dashboardFuture = ApiService.getDashboard();
+    _setupOverviewFuture = _loadSetupOverview();
+  }
+
+  Future<Map<String, dynamic>> _loadSetupOverview() async {
+    final user = await ApiService.getCurrentUser();
+    final userKey = user['id']?.toString() ?? user['email']?.toString();
+    final prefs = await SharedPreferences.getInstance();
+    final draftJson = userKey == null
+        ? null
+        : prefs.getString('financial_setup_draft_$userKey');
+    final draft = draftJson == null
+        ? <String, dynamic>{}
+        : Map<String, dynamic>.from(jsonDecode(draftJson) as Map);
+    final results = await Future.wait([
+      ApiService.getAccountBalances(),
+      ApiService.getCategoryBudgets(),
+      ApiService.getPlans(),
+    ]);
+    final balances = results[0]
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    final budgets = results[1]
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    Map<String, dynamic>? goal;
+    for (final item in results[2].whereType<Map>()) {
+      if (item['notes'] == 'financial_goal') {
+        goal = Map<String, dynamic>.from(item);
+        break;
+      }
+    }
+
+    if (draft.isNotEmpty) {
+      final draftBalance = draft['balance']?.toString().trim() ?? '';
+      final draftInstitution =
+          draft['institution_name']?.toString().trim() ?? '';
+      final draftDate = draft['balance_date']?.toString();
+      balances
+        ..clear()
+        ..add({
+          'institution_name': draftInstitution,
+          'balance': draftBalance,
+          'balance_date': draftDate,
+        });
+
+      final draftBudgets = draft['budgets'];
+      if (draftBudgets is Map) {
+        budgets
+          ..clear()
+          ..addAll(
+            draftBudgets.entries
+                .where((entry) => entry.value.toString().trim().isNotEmpty)
+                .map(
+                  (entry) => {
+                    'category': entry.key.toString(),
+                    'monthly_limit': entry.value,
+                  },
+                ),
+          );
+      }
+
+      final draftGoalName = draft['goal_name']?.toString().trim() ?? '';
+      final draftGoalAmount = draft['goal_amount']?.toString().trim() ?? '';
+      goal = draftGoalName.isEmpty && draftGoalAmount.isEmpty
+          ? null
+          : {'name': draftGoalName, 'target_amount': draftGoalAmount};
+    }
+
+    return {
+      'balances': balances,
+      'budgets': budgets,
+      'goal': goal,
+      'has_draft': draft.isNotEmpty,
+      'step': draft['step'],
+    };
+  }
+
+  Future<void> _openSetup() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => FinancialSetupScreen(
+          onFinished: () async {
+            if (Navigator.of(context).canPop()) {
+              Navigator.of(context).pop();
+            }
+          },
+        ),
+      ),
+    );
+    if (!mounted) return;
+    setState(() {
+      _dashboardFuture = ApiService.getDashboard();
+      _setupOverviewFuture = _loadSetupOverview();
+    });
+  }
+
+  void _refreshSetupOverview() {
+    setState(() => _setupOverviewFuture = _loadSetupOverview());
+  }
 
   String _formatMoney(dynamic value) {
     final number = (value as num?)?.toDouble() ?? 0;
@@ -63,7 +182,7 @@ class DashboardScreen extends StatelessWidget {
 
     return Scaffold(
       body: FutureBuilder<Map<String, dynamic>>(
-        future: ApiService.getDashboard(),
+        future: _dashboardFuture,
         builder: (context, snapshot) {
           if (snapshot.connectionState == ConnectionState.waiting) {
             return const _DashboardLoadingState();
@@ -71,7 +190,8 @@ class DashboardScreen extends StatelessWidget {
 
           if (snapshot.hasError) {
             return _DashboardErrorState(
-              message: "Dashboard verisi alınamadı. Backend bağlantısını ve endpoint yanıtını kontrol et.",
+              message:
+                  "Dashboard verisi alınamadı. Backend bağlantısını ve endpoint yanıtını kontrol et.",
             );
           }
 
@@ -79,6 +199,7 @@ class DashboardScreen extends StatelessWidget {
           final income = (data["income"] as num?) ?? 0;
           final expense = (data["expense"] as num?) ?? 0;
           final saving = (data["saving"] as num?) ?? 0;
+          final balance = (data["balance"] as num?) ?? saving;
           final risk = data["risk"]?.toString() ?? "-";
           final recentTransactions =
               (data["recent_transactions"] as List<dynamic>? ?? []);
@@ -100,9 +221,28 @@ class DashboardScreen extends StatelessWidget {
                   ),
                   const SizedBox(height: 24),
                   _HeroBalanceCard(
-                    saving: _formatMoney(saving),
+                    balance: _formatMoney(balance),
                     income: _formatMoney(income),
                     expense: _formatMoney(expense),
+                  ),
+                  const SizedBox(height: 20),
+                  FutureBuilder<Map<String, dynamic>>(
+                    future: _setupOverviewFuture,
+                    builder: (context, setupSnapshot) {
+                      if (setupSnapshot.connectionState ==
+                          ConnectionState.waiting) {
+                        return const _SetupOverviewLoadingCard();
+                      }
+                      if (setupSnapshot.hasError) {
+                        return _SetupOverviewErrorCard(
+                          onRetry: _refreshSetupOverview,
+                        );
+                      }
+                      return _SetupOverviewCard(
+                        data: setupSnapshot.data ?? const {},
+                        onContinue: _openSetup,
+                      );
+                    },
                   ),
                   const SizedBox(height: 20),
                   Row(
@@ -159,15 +299,13 @@ class DashboardScreen extends StatelessWidget {
                     accent: _riskColor(risk),
                   ),
                   const SizedBox(height: 28),
-                  Text(
-                    "Son işlemler",
-                    style: theme.textTheme.headlineMedium,
-                  ),
+                  Text("Son işlemler", style: theme.textTheme.headlineMedium),
                   const SizedBox(height: 12),
                   if (recentTransactions.isEmpty)
                     const _EmptyBlock(
                       title: "Henüz işlem görünmüyor",
-                      subtitle: "İşlem ekledikçe burada en güncel hareketleri göreceksin.",
+                      subtitle:
+                          "İşlem ekledikçe burada en güncel hareketleri göreceksin.",
                     )
                   else
                     ...recentTransactions.map((item) {
@@ -180,7 +318,9 @@ class DashboardScreen extends StatelessWidget {
                           category: map["category"]?.toString() ?? "-",
                           amount: _signedMoney(amount),
                           amountColor: _amountColor(amount),
-                          icon: _categoryIcon(map["category"]?.toString() ?? ""),
+                          icon: _categoryIcon(
+                            map["category"]?.toString() ?? "",
+                          ),
                         ),
                       );
                     }),
@@ -195,12 +335,12 @@ class DashboardScreen extends StatelessWidget {
 }
 
 class _HeroBalanceCard extends StatelessWidget {
-  final String saving;
+  final String balance;
   final String income;
   final String expense;
 
   const _HeroBalanceCard({
-    required this.saving,
+    required this.balance,
     required this.income,
     required this.expense,
   });
@@ -213,11 +353,7 @@ class _HeroBalanceCard extends StatelessWidget {
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(30),
         gradient: const LinearGradient(
-          colors: [
-            Color(0xFF17352A),
-            Color(0xFF28503F),
-            Color(0xFF3D6A55),
-          ],
+          colors: [Color(0xFF17352A), Color(0xFF28503F), Color(0xFF3D6A55)],
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
         ),
@@ -234,14 +370,11 @@ class _HeroBalanceCard extends StatelessWidget {
         children: [
           const Text(
             "Toplam bakiye",
-            style: TextStyle(
-              color: Color(0xCCFFFFFF),
-              fontSize: 15,
-            ),
+            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 15),
           ),
           const SizedBox(height: 12),
           Text(
-            saving,
+            balance,
             style: const TextStyle(
               color: Colors.white,
               fontSize: 38,
@@ -253,17 +386,11 @@ class _HeroBalanceCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                child: _MiniStat(
-                  label: "Gelir",
-                  value: income,
-                ),
+                child: _MiniStat(label: "Gelir", value: income),
               ),
               const SizedBox(width: 12),
               Expanded(
-                child: _MiniStat(
-                  label: "Gider",
-                  value: expense,
-                ),
+                child: _MiniStat(label: "Gider", value: expense),
               ),
             ],
           ),
@@ -277,10 +404,7 @@ class _MiniStat extends StatelessWidget {
   final String label;
   final String value;
 
-  const _MiniStat({
-    required this.label,
-    required this.value,
-  });
+  const _MiniStat({required this.label, required this.value});
 
   @override
   Widget build(BuildContext context) {
@@ -296,10 +420,7 @@ class _MiniStat extends StatelessWidget {
         children: [
           Text(
             label,
-            style: const TextStyle(
-              color: Color(0xCCFFFFFF),
-              fontSize: 13,
-            ),
+            style: const TextStyle(color: Color(0xCCFFFFFF), fontSize: 13),
           ),
           const SizedBox(height: 8),
           Text(
@@ -399,17 +520,17 @@ class _InsightCard extends StatelessWidget {
           Row(
             children: [
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 7,
+                ),
                 decoration: BoxDecoration(
                   color: accent.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(999),
                 ),
                 child: Text(
                   "Risk: $risk",
-                  style: TextStyle(
-                    color: accent,
-                    fontWeight: FontWeight.w700,
-                  ),
+                  style: TextStyle(color: accent, fontWeight: FontWeight.w700),
                 ),
               ),
             ],
@@ -512,8 +633,262 @@ class _DashboardLoadingState extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: CircularProgressIndicator(),
+    return const Center(child: CircularProgressIndicator());
+  }
+}
+
+class _SetupOverviewLoadingCard extends StatelessWidget {
+  const _SetupOverviewLoadingCard();
+
+  @override
+  Widget build(BuildContext context) {
+    return const Card(
+      child: Padding(
+        padding: EdgeInsets.all(20),
+        child: Center(child: CircularProgressIndicator()),
+      ),
+    );
+  }
+}
+
+class _SetupOverviewErrorCard extends StatelessWidget {
+  final VoidCallback onRetry;
+
+  const _SetupOverviewErrorCard({required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Row(
+          children: [
+            const Expanded(child: Text('Kurulum bilgileri yüklenemedi.')),
+            TextButton(onPressed: onRetry, child: const Text('Tekrar dene')),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SetupOverviewCard extends StatelessWidget {
+  final Map<String, dynamic> data;
+  final VoidCallback onContinue;
+
+  const _SetupOverviewCard({required this.data, required this.onContinue});
+
+  String _money(dynamic value) {
+    final amount = double.tryParse(value?.toString() ?? '');
+    return amount == null ? '—' : '₺${amount.toStringAsFixed(2)}';
+  }
+
+  String _balanceDate(dynamic value) {
+    final date = DateTime.tryParse(value?.toString() ?? '');
+    if (date == null) return 'Tarih belirtilmedi';
+    return '${date.day.toString().padLeft(2, '0')}.'
+        '${date.month.toString().padLeft(2, '0')}.'
+        '${date.year}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final balances = (data['balances'] as List<dynamic>? ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .where((item) {
+          return item['institution_name']?.toString().trim().isNotEmpty ==
+                  true ||
+              item['balance']?.toString().trim().isNotEmpty == true;
+        })
+        .toList();
+    final budgets = (data['budgets'] as List<dynamic>? ?? [])
+        .whereType<Map>()
+        .map((item) => Map<String, dynamic>.from(item))
+        .toList();
+    final goalRaw = data['goal'];
+    final goal = goalRaw is Map<String, dynamic> ? goalRaw : null;
+    final hasDraft = data['has_draft'] == true;
+    final savedStep = (data['step'] as num?)?.toInt();
+    final hasAnySetup =
+        balances.isNotEmpty || budgets.isNotEmpty || goal != null;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFCF6),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: const Color(0xFFE5E9E3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFE4EFE8),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: const Icon(Icons.tune_rounded, color: Color(0xFF1E6B52)),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Başlangıç ayarların',
+                      style: TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF1E2722),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      hasDraft
+                          ? 'Kurulum taslağın kaydedildi.'
+                          : hasAnySetup
+                          ? 'Kaydettiğin bilgiler burada.'
+                          : 'Finansal görünümünü kişiselleştir.',
+                      style: const TextStyle(
+                        color: Color(0xFF68756E),
+                        fontSize: 13,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (hasDraft && savedStep != null) ...[
+            const SizedBox(height: 14),
+            Text(
+              'Kaldığın yer: ${savedStep + 1} / 14. adım',
+              style: const TextStyle(
+                color: Color(0xFF1E6B52),
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ],
+          if (!hasAnySetup && !hasDraft) ...[
+            const SizedBox(height: 14),
+            const Text(
+              'Başlangıç bakiyesi, aylık kategori limitleri ve birikim hedefini ekleyebilirsin.',
+              style: TextStyle(color: Color(0xFF68756E), height: 1.4),
+            ),
+          ],
+          if (balances.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            const _SetupSectionTitle(
+              icon: Icons.account_balance_wallet_outlined,
+              title: 'Banka bakiyeleri',
+            ),
+            const SizedBox(height: 8),
+            ...balances.map(
+              (balance) => Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: Text(
+                  '${balance['institution_name']?.toString().trim().isNotEmpty == true ? balance['institution_name'] : 'Banka'}'
+                  ' · ${_money(balance['balance'])}'
+                  ' · ${_balanceDate(balance['balance_date'])}',
+                  style: const TextStyle(color: Color(0xFF44534A)),
+                ),
+              ),
+            ),
+          ],
+          if (budgets.isNotEmpty) ...[
+            const SizedBox(height: 14),
+            const _SetupSectionTitle(
+              icon: Icons.savings_outlined,
+              title: 'Aylık kategori limitleri',
+            ),
+            const SizedBox(height: 8),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: budgets.map((budget) {
+                return Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 7,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF0F3EF),
+                    borderRadius: BorderRadius.circular(999),
+                  ),
+                  child: Text(
+                    '${budget['category']}: ${_money(budget['monthly_limit'])}',
+                    style: const TextStyle(
+                      color: Color(0xFF44534A),
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                );
+              }).toList(),
+            ),
+          ],
+          if (goal != null) ...[
+            const SizedBox(height: 14),
+            _SetupSectionTitle(
+              icon: Icons.flag_outlined,
+              title:
+                  'Birikim hedefi · '
+                  '${goal['name']?.toString().trim().isNotEmpty == true ? goal['name'] : 'Hedef'}'
+                  ' · ${_money(goal['target_amount'])}',
+            ),
+          ],
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: onContinue,
+              icon: Icon(
+                hasDraft ? Icons.play_arrow_rounded : Icons.edit_outlined,
+              ),
+              label: Text(
+                hasDraft
+                    ? 'Kuruluma kaldığım yerden devam et'
+                    : hasAnySetup
+                    ? 'Ayarları düzenle'
+                    : 'Kurulumu başlat',
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _SetupSectionTitle extends StatelessWidget {
+  final IconData icon;
+  final String title;
+
+  const _SetupSectionTitle({required this.icon, required this.title});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 17, color: const Color(0xFF1E6B52)),
+        const SizedBox(width: 7),
+        Expanded(
+          child: Text(
+            title,
+            style: const TextStyle(
+              color: Color(0xFF34443B),
+              fontSize: 13,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -521,9 +896,7 @@ class _DashboardLoadingState extends StatelessWidget {
 class _DashboardErrorState extends StatelessWidget {
   final String message;
 
-  const _DashboardErrorState({
-    required this.message,
-  });
+  const _DashboardErrorState({required this.message});
 
   @override
   Widget build(BuildContext context) {
@@ -549,10 +922,7 @@ class _DashboardErrorState extends StatelessWidget {
                 const SizedBox(height: 14),
                 const Text(
                   "Veri alınamadı",
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
                 ),
                 const SizedBox(height: 8),
                 Text(
@@ -576,10 +946,7 @@ class _EmptyBlock extends StatelessWidget {
   final String title;
   final String subtitle;
 
-  const _EmptyBlock({
-    required this.title,
-    required this.subtitle,
-  });
+  const _EmptyBlock({required this.title, required this.subtitle});
 
   @override
   Widget build(BuildContext context) {
@@ -593,11 +960,7 @@ class _EmptyBlock extends StatelessWidget {
       ),
       child: Column(
         children: [
-          const Icon(
-            Icons.inbox_rounded,
-            size: 40,
-            color: Color(0xFF7B887F),
-          ),
+          const Icon(Icons.inbox_rounded, size: 40, color: Color(0xFF7B887F)),
           const SizedBox(height: 12),
           Text(
             title,
@@ -611,10 +974,7 @@ class _EmptyBlock extends StatelessWidget {
           Text(
             subtitle,
             textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF64716B),
-              height: 1.45,
-            ),
+            style: const TextStyle(color: Color(0xFF64716B), height: 1.45),
           ),
         ],
       ),

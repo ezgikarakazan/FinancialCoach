@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/financial_setup_screen.dart';
 import 'screens/main_screen.dart';
 import 'services/api_service.dart';
 import 'services/notification_service.dart';
@@ -111,9 +112,11 @@ class _AppEntryPoint extends StatefulWidget {
 class _AppEntryPointState extends State<_AppEntryPoint> {
   static const String onboardingKey = 'has_seen_onboarding';
   static const String tokenKey = 'auth_token';
+  static const String financialSetupKey = 'financial_setup_pending';
 
   bool _loading = true;
   bool _hasSeenOnboarding = false;
+  bool _financialSetupPending = false;
   String? _token;
 
   @override
@@ -127,6 +130,7 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
 
     final prefs = await SharedPreferences.getInstance();
     final hasSeenOnboarding = prefs.getBool(onboardingKey) ?? false;
+    final financialSetupPending = prefs.getBool(financialSetupKey) ?? false;
     final savedToken = prefs.getString(tokenKey);
 
     String? validToken;
@@ -146,6 +150,7 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
     if (!mounted) return;
     setState(() {
       _hasSeenOnboarding = hasSeenOnboarding;
+      _financialSetupPending = financialSetupPending;
       _token = validToken;
       _loading = false;
     });
@@ -161,15 +166,24 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
     });
   }
 
-  Future<void> _onAuthenticated(String token) async {
+  Future<void> _onAuthenticated(String token, bool isNewUser) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(tokenKey, token);
+    await prefs.setBool(financialSetupKey, isNewUser);
     ApiService.setToken(token);
 
     if (!mounted) return;
     setState(() {
       _token = token;
+      _financialSetupPending = isNewUser;
     });
+  }
+
+  Future<void> _onFinancialSetupFinished() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(financialSetupKey, false);
+    if (!mounted) return;
+    setState(() => _financialSetupPending = false);
   }
 
   Future<void> _onLogout() async {
@@ -197,12 +211,16 @@ class _AppEntryPointState extends State<_AppEntryPoint> {
       return AuthScreen(onAuthenticated: _onAuthenticated);
     }
 
+    if (_financialSetupPending) {
+      return FinancialSetupScreen(onFinished: _onFinancialSetupFinished);
+    }
+
     return MainScreen(onLogout: _onLogout);
   }
 }
 
 class AuthScreen extends StatefulWidget {
-  final Future<void> Function(String token) onAuthenticated;
+  final Future<void> Function(String token, bool isNewUser) onAuthenticated;
 
   const AuthScreen({super.key, required this.onAuthenticated});
 
@@ -332,7 +350,7 @@ class _AuthScreenState extends State<AuthScreen> {
         throw Exception("Token alınamadı");
       }
 
-      await widget.onAuthenticated(token);
+      await widget.onAuthenticated(token, !_isLogin);
       _showMessage(
         _isLogin ? "Giriş başarılı" : "Hesabın oluşturuldu",
         error: false,

@@ -4,6 +4,17 @@ A new Flutter project.
 
 ## Test ortamı
 
+Yeni kayıt sonrasında kullanıcı isteğe bağlı olarak banka/hesap adını,
+başlangıç bakiyesini ve bu bakiyenin tarihini girebilir. Başlangıç bakiyesi
+gelir olarak kaydedilmez; dashboard bakiyesini hesaplarken bu tutarı baz alır
+ve aynı bankadaki daha sonraki işlemleri ekler. PDF yükleme ekranında aynı banka
+ve tarih seçilerek ekstre ilişkilendirilebilir; bu bilgiler PDF geçmişinde
+gösterilir. Kurulum sırasında kategori bazlı aylık limitler ve birikim hedefi
+de eklenebilir.
+Uygulama bu ayki giderleri limitlerle karşılaştırır ve limitin %80'inde ve
+aşımında bildirim verir. Birikim hedefindeki ilerleme Planlar ekranından
+eklenen birikim kayıtlarıyla takip edilir.
+
 Flutter testleri için Flutter `3.44.2` ve Dart `3.12.2` kullanılır:
 
 ```powershell

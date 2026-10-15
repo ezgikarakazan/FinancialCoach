@@ -1,15 +1,12 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import 'merchant_category_rules_screen.dart';
 
 class ProfilScreen extends StatefulWidget {
   final Future<void> Function() onLogout;
   final Future<Map<String, dynamic>>? userFuture;
 
-  const ProfilScreen({
-    super.key,
-    required this.onLogout,
-    this.userFuture,
-  });
+  const ProfilScreen({super.key, required this.onLogout, this.userFuture});
 
   @override
   State<ProfilScreen> createState() => _ProfilScreenState();
@@ -31,6 +28,14 @@ class _ProfilScreenState extends State<ProfilScreen> {
     });
   }
 
+  void _openMerchantCategoryRules() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const MerchantCategoryRulesScreen(),
+      ),
+    );
+  }
+
   void _showMessage(String message, {bool isError = true}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -38,14 +43,18 @@ class _ProfilScreenState extends State<ProfilScreen> {
       ..showSnackBar(
         SnackBar(
           behavior: SnackBarBehavior.floating,
-          backgroundColor: isError ? const Color(0xFFB04242) : const Color(0xFF1E6B52),
+          backgroundColor: isError
+              ? const Color(0xFFB04242)
+              : const Color(0xFF1E6B52),
           content: Text(message),
         ),
       );
   }
 
   Future<void> _openEditProfile() async {
-    final currentUser = await _userFuture.catchError((_) => <String, dynamic>{});
+    final currentUser = await _userFuture.catchError(
+      (_) => <String, dynamic>{},
+    );
     if (!mounted) return;
 
     final nameController = TextEditingController(
@@ -106,10 +115,11 @@ class _ProfilScreenState extends State<ProfilScreen> {
 
                           setState(() => saving = true);
                           try {
-                            final updatedUser = await ApiService.updateCurrentUser(
-                              name: name,
-                              email: email,
-                            );
+                            final updatedUser =
+                                await ApiService.updateCurrentUser(
+                                  name: name,
+                                  email: email,
+                                );
                             if (!mounted) return;
                             setState(() {
                               _userFuture = Future.value(updatedUser);
@@ -117,9 +127,14 @@ class _ProfilScreenState extends State<ProfilScreen> {
                             if (ctx.mounted) {
                               Navigator.pop(ctx, true);
                             }
-                            _showMessage('Profil bilgileri güncellendi', isError: false);
+                            _showMessage(
+                              'Profil bilgileri güncellendi',
+                              isError: false,
+                            );
                           } catch (e) {
-                            _showMessage(e.toString().replaceFirst('Exception: ', ''));
+                            _showMessage(
+                              e.toString().replaceFirst('Exception: ', ''),
+                            );
                           } finally {
                             if (ctx.mounted) {
                               setState(() => saving = false);
@@ -201,17 +216,23 @@ class _ProfilScreenState extends State<ProfilScreen> {
                   onPressed: saving
                       ? null
                       : () async {
-                          final currentPassword = currentPasswordController.text.trim();
+                          final currentPassword = currentPasswordController.text
+                              .trim();
                           final newPassword = newPasswordController.text.trim();
-                          final confirmPassword = confirmPasswordController.text.trim();
+                          final confirmPassword = confirmPasswordController.text
+                              .trim();
 
-                          if (currentPassword.isEmpty || newPassword.isEmpty || confirmPassword.isEmpty) {
+                          if (currentPassword.isEmpty ||
+                              newPassword.isEmpty ||
+                              confirmPassword.isEmpty) {
                             _showMessage('Tüm şifre alanları zorunludur');
                             return;
                           }
 
                           if (newPassword.length < 8) {
-                            _showMessage('Yeni şifre en az 8 karakter olmalıdır');
+                            _showMessage(
+                              'Yeni şifre en az 8 karakter olmalıdır',
+                            );
                             return;
                           }
 
@@ -230,9 +251,14 @@ class _ProfilScreenState extends State<ProfilScreen> {
                             if (ctx.mounted) {
                               Navigator.pop(ctx, true);
                             }
-                            _showMessage('Şifre başarıyla güncellendi', isError: false);
+                            _showMessage(
+                              'Şifre başarıyla güncellendi',
+                              isError: false,
+                            );
                           } catch (e) {
-                            _showMessage(e.toString().replaceFirst('Exception: ', ''));
+                            _showMessage(
+                              e.toString().replaceFirst('Exception: ', ''),
+                            );
                           } finally {
                             if (ctx.mounted) {
                               setState(() => saving = false);
@@ -272,7 +298,9 @@ class _ProfilScreenState extends State<ProfilScreen> {
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, true),
-            style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB04242)),
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFFB04242),
+            ),
             child: const Text("Çıkış Yap"),
           ),
         ],
@@ -322,12 +350,10 @@ class _ProfilScreenState extends State<ProfilScreen> {
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      snapshot.error?.toString() ?? 'Lütfen daha sonra tekrar deneyin.',
+                      snapshot.error?.toString() ??
+                          'Lütfen daha sonra tekrar deneyin.',
                       textAlign: TextAlign.center,
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey[600],
-                      ),
+                      style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                     ),
                     const SizedBox(height: 20),
                     FilledButton.icon(
@@ -370,10 +396,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
                 const SizedBox(height: 8),
                 Text(
                   email,
-                  style: TextStyle(
-                    fontSize: 14,
-                    color: Colors.grey[600],
-                  ),
+                  style: TextStyle(fontSize: 14, color: Colors.grey[600]),
                 ),
                 const SizedBox(height: 30),
                 _buildProfileOption(
@@ -395,6 +418,11 @@ class _ProfilScreenState extends State<ProfilScreen> {
                   icon: Icons.settings,
                   title: 'Ayarlar',
                   onTap: () {},
+                ),
+                _buildProfileOption(
+                  icon: Icons.auto_awesome,
+                  title: 'Öğrenilen Kategoriler',
+                  onTap: _openMerchantCategoryRules,
                 ),
                 _buildProfileOption(
                   icon: Icons.help,
@@ -429,12 +457,7 @@ class _ProfilScreenState extends State<ProfilScreen> {
           trailing: const Icon(Icons.arrow_forward_ios, size: 16),
           onTap: onTap,
         ),
-        if (!isLast)
-          Divider(
-            height: 1,
-            indent: 16,
-            endIndent: 16,
-          ),
+        if (!isLast) Divider(height: 1, indent: 16, endIndent: 16),
       ],
     );
   }

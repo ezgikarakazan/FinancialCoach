@@ -2,8 +2,11 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, List
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from uuid import uuid4
 import hashlib
+import json
 import os
 import re
 import secrets
@@ -32,11 +35,15 @@ from database import (
     ensure_user_login_security_columns,
     ensure_user_access_columns,
     ensure_plan_payment_day_column,
+    ensure_pdf_upload_statement_date_column,
 )
 from models.transaction import Base, Transaction
 from models.user import User
 from models.pdf_upload import PdfUpload, PdfUploadItem
+from models.account_balance import AccountBalance
+from models.category_budget import CategoryBudget
 from models.plan import Plan, PlanEntry
+from models.merchant_category_rule import MerchantCategoryRule
 
 load_dotenv()
 
@@ -55,6 +62,7 @@ ensure_transaction_classification_columns()
 ensure_description_columns()
 ensure_pdf_upload_statement_type_columns()
 ensure_plan_payment_day_column()
+ensure_pdf_upload_statement_date_column()
 
 configured_admin_email = os.getenv("ADMIN_EMAIL", "").strip().lower()
 if configured_admin_email:
@@ -162,6 +170,220 @@ def get_current_user(
     return user
 
 
+def _normalise_ai_amount(value: Any) -> float:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        number = 0.0
+    return abs(number)
+
+
+def _build_rule_based_ai_summary(
+    db: Session,
+    current_user: User,
+    lookback_days: int,
+) -> dict[str, Any]:
+    if lookback_days <= 0:
+        raise HTTPException(status_code=400, detail="Analiz dönemi 1 günden büyük olmalıdır")
+
+    cutoff = datetime.now(timezone.utc).date() - timedelta(days=lookback_days)
+    rows = (
+        db.query(Transaction)
+        .filter(
+            Transaction.user_id == current_user.id,
+            Transaction.date >= cutoff,
+        )
+        .order_by(Transaction.date.desc(), Transaction.id.desc())
+        .all()
+    )
+
+    total_income = 0.0
+    total_expense = 0.0
+    expense_by_category: dict[str, float] = defaultdict(float)
+
+    for item in rows:
+        amount_value = float(item.amount or 0)
+        if item.transaction_type == "credit_card_payment":
+            continue
+        if amount_value > 0:
+            total_income += abs(amount_value)
+        elif amount_value < 0:
+            total_expense += abs(amount_value)
+            expense_by_category[item.category or "Diğer"] += abs(amount_value)
+
+    net_saving = total_income - total_expense
+    income_ratio = total_expense / total_income if total_income else 0.0
+    if income_ratio >= 0.85:
+        risk_level = "Yüksek"
+    elif income_ratio >= 0.6:
+        risk_level = "Orta"
+    else:
+        risk_level = "Düşük"
+
+    top_categories = [
+        {"category": category, "amount": round(amount, 2)}
+        for category, amount in sorted(
+            expense_by_category.items(),
+            key=lambda entry: entry[1],
+            reverse=True,
+        )[:5]
+    ]
+
+    category_text = (
+        f"En çok harcama {top_categories[0]['category']} kategorisinde yapıldı ({top_categories[0]['amount']} TL)."
+        if top_categories
+        else "Bu dönemde geçerli bir harcama kategorisi kaydı bulunamadı."
+    )
+
+    if total_income <= 0:
+        summary = (
+            f"Son {lookback_days} günde gelir kaydı bulunmuyor. Harcama davranışını izlemeye devam ederek "
+            "gelir akışını güçlendirebilirsiniz."
+        )
+    else:
+        summary = (
+            f"Son {lookback_days} günde toplam gelir {total_income:,.2f} TL, toplam gider {total_expense:,.2f} TL oldu. "
+            f"Net birikim {net_saving:,.2f} TL. {category_text}"
+        )
+
+    recommendations: list[str] = []
+    if risk_level == "Yüksek":
+        recommendations.append("Aylık giderleri en çok yüklenen kategoriye göre %15 oranında azaltmayı hedefleyin.")
+    elif risk_level == "Orta":
+        recommendations.append("Günlük harcamaları takip ederseniz aylık bütçenizi daha kontrollü yönetebilirsiniz.")
+    else:
+        recommendations.append("Mevcut harcama düzeni sağlıklı görünüyor; birikim hedefinizi artırmak için otomatik tasarruf ekleyebilirsiniz.")
+
+    if top_categories:
+        top_name = top_categories[0]["category"]
+        recommendations.append(f"{top_name} kategorisinde daha net bir limit belirleyerek harcamayı azaltabilirsiniz.")
+
+    if net_saving < 0:
+        recommendations.append("Giderler gelirden fazla görünüyor; sabit masrafları yeniden gözden geçirmenizi öneririm.")
+    elif net_saving > 0:
+        recommendations.append("Mevcut net tasarrufunuz pozitif. Bu tutarın bir kısmını plan hedeflerinize aktarabilirsiniz.")
+
+    return {
+        "period_days": lookback_days,
+        "total_income": round(total_income, 2),
+        "total_expense": round(total_expense, 2),
+        "net_saving": round(net_saving, 2),
+        "expense_ratio": round(income_ratio, 4),
+        "risk_level": risk_level,
+        "top_categories": top_categories,
+        "summary": summary,
+        "recommendations": recommendations[:4],
+        "generated_by": "rule_based",
+    }
+
+
+def _call_openai_compatible_api(prompt: str) -> str:
+    api_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if not api_key:
+        return ""
+
+    base_url = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    model = (os.getenv("OPENAI_MODEL") or "gpt-4o-mini").strip()
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.4,
+    }
+
+    try:
+        req = urllib_request.Request(
+            f"{base_url}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib_request.urlopen(req, timeout=30) as response:
+            body = response.read().decode("utf-8")
+        result = json.loads(body)
+        choices = result.get("choices") or []
+        if not choices:
+            return ""
+        return (choices[0].get("message") or {}).get("content", "").strip()
+    except (urllib_error.URLError, ValueError, KeyError, TimeoutError):
+        return ""
+
+
+def _build_local_coach_reply(message: str, summary: dict[str, Any]) -> str:
+    normalized = (message or "").strip().lower()
+    if not normalized:
+        normalized = "genel durum"
+
+    if any(keyword in normalized for keyword in ["tasarruf", "birikim", "kurtarma", "azalt"]):
+        return (
+            "Tasarruf için öncelikle en yüksek harcama kategorisinin üzerinde kontrol kurmalısınız. "
+            f"Şu anda en yüksek gider alanı: {summary['top_categories'][0]['category']} ({summary['top_categories'][0]['amount']} TL). "
+            "Bu kategori için aylık limit belirleyip otomatik birikim planı oluşturabilirsiniz."
+        )
+
+    if any(keyword in normalized for keyword in ["risk", "tehlike", "ciddi", "yakında"]):
+        return (
+            f"Mevcut finansal görünüm {summary['risk_level']} risk seviyesinde. "
+            f"Gider/gelir oranı {summary['expense_ratio']:.2%} ve net birikim {summary['net_saving']:,.2f} TL. "
+            "Sabit giderleri kontrol etmek ve 30 günlük harcamaları tekrar gözden geçirmek en doğru adım olur."
+        )
+
+    if any(keyword in normalized for keyword in ["plan", "hedef", "yatırım", "bütçe"]):
+        return (
+            "Plan hedeflerinizi desteklemek için ilk olarak harcama kalemlerinizi kategorilere ayırıp "
+            "en yüksek kalemde %10-15 tasarruf hedefi belirleyin. Sonrasında bu tutarı otomatik birikim planına eklemeyi deneyin."
+        )
+
+    return (
+        f"Son 30 günde toplam gelir {summary['total_income']:,.2f} TL, toplam gider {summary['total_expense']:,.2f} TL ve net tasarruf {summary['net_saving']:,.2f} TL. "
+        f"En yüksek gider alanı {summary['top_categories'][0]['category'] if summary['top_categories'] else 'diğer'} olup, mevcut risk seviyesi {summary['risk_level']}."
+    )
+
+
+class AICoachChatRequest(BaseModel):
+    message: str = ""
+    lookback_days: int = 30
+
+
+@app.get("/ai/coach/summary")
+def get_ai_coach_summary(
+    days: int = 30,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _build_rule_based_ai_summary(db, current_user, days)
+
+
+@app.post("/ai/coach/chat")
+def ask_ai_coach(
+    payload: AICoachChatRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    summary = _build_rule_based_ai_summary(db, current_user, payload.lookback_days)
+    prompt = (
+        "Sen finansal koçsun. Kullanıcıya Türkçe cevap ver. "
+        "Önce veriye dayalı kısa özet ver, sonra net 2 öneri ekle. "
+        "Öneriler riskli veya aşırı harcamayı azaltmaya yönelik olmalı. "
+        "Kesin yatırım tavsiyesi vermeyin.\n\n"
+        f"Kullanıcı sorusu: {payload.message or 'Genel finansal durumum nasıl?'}\n"
+        f"Veri: toplam gelir={summary['total_income']}, toplam gider={summary['total_expense']}, "
+        f"net tasarruf={summary['net_saving']}, risk={summary['risk_level']}, "
+        f"en yüksek gider kategorileri={summary['top_categories']}"
+    )
+    llm_reply = _call_openai_compatible_api(prompt)
+    final_reply = llm_reply.strip() if llm_reply else _build_local_coach_reply(payload.message, summary)
+
+    return {
+        "response": final_reply,
+        "summary": summary,
+        "generated_by": "openai" if llm_reply else "rule_based",
+    }
+
+
 class TransactionCreate(BaseModel):
     title: str
     amount: Decimal
@@ -222,6 +444,43 @@ class PlanCreate(BaseModel):
     notes: str = ""
 
 
+class AccountBalanceCreate(BaseModel):
+    institution_name: str
+    balance: Decimal
+    balance_date: date
+    previous_institution_name: str | None = None
+    previous_balance_date: date | None = None
+
+
+class AccountBalanceOut(BaseModel):
+    id: int
+    institution_name: str
+    balance: Decimal
+    balance_date: date
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class CategoryBudgetCreate(BaseModel):
+    category: str
+    monthly_limit: Decimal
+    warning_percent: int = 80
+
+
+class FinancialGoalCreate(BaseModel):
+    name: str
+    target_amount: Decimal
+
+
+class CategoryBudgetOut(BaseModel):
+    id: int
+    category: str
+    monthly_limit: Decimal
+    warning_percent: int
+    spent_this_month: float
+    percent_used: float
+
+
 class PlanEntryCreate(BaseModel):
     title: str
     amount: Decimal
@@ -269,6 +528,7 @@ class PdfUploadSummary(BaseModel):
     skipped_count: int
     pending_count: int
     institution_name: str
+    statement_date: date | None = None
 
 
 class PdfUploadDetail(BaseModel):
@@ -277,6 +537,7 @@ class PdfUploadDetail(BaseModel):
     uploaded_at: datetime
     items: List[PdfUploadItemOut]
     institution_name: str
+    statement_date: date | None = None
 
 
 class PdfUploadItemDecision(BaseModel):
@@ -285,6 +546,17 @@ class PdfUploadItemDecision(BaseModel):
     description: str | None = None
     category: str | None = None
     source_type: str | None = None
+    learn_category: bool = False
+
+
+class MerchantCategoryRuleOut(BaseModel):
+    id: int
+    merchant_key: str
+    category: str
+
+
+class MerchantCategoryRuleUpdate(BaseModel):
+    category: str
 
 
 VALID_TRANSACTION_TYPES = {
@@ -419,6 +691,53 @@ def _parse_statement_date(date_raw: str) -> date | None:
         return None
 
 
+def _infer_statement_period(transactions: list[dict[str, Any]]) -> str | None:
+    transaction_dates = []
+    for transaction in transactions:
+        raw_date = transaction.get("date")
+        if isinstance(raw_date, date):
+            transaction_dates.append(raw_date)
+        elif isinstance(raw_date, str):
+            try:
+                transaction_dates.append(date.fromisoformat(raw_date))
+            except ValueError:
+                continue
+
+    if not transaction_dates:
+        return None
+
+    month_names = {
+        1: "Ocak",
+        2: "Şubat",
+        3: "Mart",
+        4: "Nisan",
+        5: "Mayıs",
+        6: "Haziran",
+        7: "Temmuz",
+        8: "Ağustos",
+        9: "Eylül",
+        10: "Ekim",
+        11: "Kasım",
+        12: "Aralık",
+    }
+    first_date = min(transaction_dates)
+    last_date = max(transaction_dates)
+    first_month = (first_date.year, first_date.month)
+    last_month = (last_date.year, last_date.month)
+
+    if first_month == last_month:
+        return f"{month_names[first_date.month]} {first_date.year}"
+    if first_date.year == last_date.year:
+        return (
+            f"{month_names[first_date.month]}-{month_names[last_date.month]} "
+            f"{first_date.year}"
+        )
+    return (
+        f"{month_names[first_date.month]} {first_date.year}-"
+        f"{month_names[last_date.month]} {last_date.year}"
+    )
+
+
 def _parse_statement_amount(amount_raw: str) -> float | None:
     cleaned = (amount_raw or "").strip().upper()
     if not cleaned:
@@ -468,6 +787,140 @@ def _guess_category(title: str) -> str:
     return "Diğer"
 
 
+def _normalize_merchant_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", (value or "").casefold())
+    normalized = "".join(
+        character for character in normalized
+        if not unicodedata.combining(character)
+    )
+    return (
+        normalized.replace("ı", "i")
+        .replace("ş", "s")
+        .replace("ğ", "g")
+        .replace("ü", "u")
+        .replace("ö", "o")
+        .replace("ç", "c")
+    )
+
+
+_STATEMENT_CATEGORY_PREFIXES = {
+    _normalize_merchant_text(category)
+    for category in (
+        "Alışveriş",
+        "Yatırım",
+        "Eğitim",
+        "Eğlence",
+        "Yeme İçme",
+        "Ulaşım",
+        "Faturalar",
+        "Sağlık",
+        "Diğer",
+    )
+}
+_GENERIC_MERCHANT_PREFIXES = {
+    "eft",
+    "fast",
+    "giden",
+    "harcama",
+    "havale",
+    "kart",
+    "odeme",
+    "pos",
+    "purchase",
+    "sanalpos",
+    "transfer",
+}
+
+
+def _merchant_key_from_title(title: str) -> str | None:
+    cleaned_title = _clean_statement_title(title)
+    prefix, separator, remainder = cleaned_title.partition(",")
+    if separator and _normalize_merchant_text(prefix.strip()) in _STATEMENT_CATEGORY_PREFIXES:
+        cleaned_title = remainder.strip()
+
+    words = re.findall(
+        r"[^\W_]+",
+        _normalize_merchant_text(cleaned_title),
+        flags=re.UNICODE,
+    )
+    merchant_key = next(
+        (
+            word
+            for word in words
+            if len(word) >= 3
+            and any(character.isalpha() for character in word)
+            and word not in _GENERIC_MERCHANT_PREFIXES
+        ),
+        None,
+    )
+    if merchant_key is None:
+        return None
+    merchant_key = merchant_key[:120]
+    return merchant_key
+
+
+def _apply_learned_merchant_categories(
+    db: Session,
+    user_id: int,
+    transactions: List[dict[str, Any]],
+) -> None:
+    rules = (
+        db.query(MerchantCategoryRule)
+        .filter(MerchantCategoryRule.user_id == user_id)
+        .all()
+    )
+    categories_by_merchant = {
+        rule.merchant_key: rule.category
+        for rule in rules
+    }
+    for transaction in transactions:
+        merchant_key = _merchant_key_from_title(str(transaction.get("title", "")))
+        if merchant_key in categories_by_merchant:
+            transaction["category"] = categories_by_merchant[merchant_key]
+
+
+def _remember_merchant_category(
+    db: Session,
+    user_id: int,
+    title: str,
+    category: str,
+) -> None:
+    merchant_key = _merchant_key_from_title(title)
+    if merchant_key is None or category not in _LEARNABLE_CATEGORIES:
+        return
+
+    rule = (
+        db.query(MerchantCategoryRule)
+        .filter(
+            MerchantCategoryRule.user_id == user_id,
+            MerchantCategoryRule.merchant_key == merchant_key,
+        )
+        .first()
+    )
+    if rule is None:
+        rule = MerchantCategoryRule(
+            user_id=user_id,
+            merchant_key=merchant_key,
+            category=category,
+        )
+        db.add(rule)
+    else:
+        rule.category = category
+
+
+_LEARNABLE_CATEGORIES = {
+    "Alışveriş",
+    "Yatırım",
+    "Eğitim",
+    "Eğlence",
+    "Yeme İçme",
+    "Ulaşım",
+    "Faturalar",
+    "Sağlık",
+    "Diğer",
+}
+
+
 def _is_summary_like_transaction(title: str, amount: float | None = None) -> bool:
     cleaned = " ".join((title or "").split()).strip().lower()
     if not cleaned:
@@ -513,8 +966,28 @@ def _is_statement_notice(title: str) -> bool:
     return any(keyword in cleaned for keyword in notice_keywords)
 
 
-def _build_transaction(tx_date: date, title: str, amount: float) -> dict[str, Any]:
+def _clean_statement_title(title: str) -> str:
     normalized_title = " ".join((title or "").split()).strip()
+    footer_markers = (
+        r"\bsayfa\s+\d+\s*/\s*\d+\b",
+        r"\benpara\s+bank\b",
+        r"\bticaret\s+sicil\s+no\b",
+        r"\bmersis\s+no\b",
+        r"\bbüyük\s+mükellefler\b",
+        r"\bbuyuk\s+mukellefler\b",
+    )
+    footer_positions = [
+        match.start()
+        for marker in footer_markers
+        if (match := re.search(marker, normalized_title, flags=re.IGNORECASE))
+    ]
+    if footer_positions:
+        normalized_title = normalized_title[: min(footer_positions)].rstrip(" -|,;/")
+    return normalized_title
+
+
+def _build_transaction(tx_date: date, title: str, amount: float) -> dict[str, Any]:
+    normalized_title = _clean_statement_title(title)
     if not normalized_title:
         normalized_title = "Ekstre İşlemi"
     elif len(normalized_title.replace(" ", "")) < 2 and not any(ch.isalpha() for ch in normalized_title):
@@ -685,7 +1158,7 @@ def _extract_transactions_from_words(words: list, row_bucket: float) -> List[dic
             if cleaned and cleaned.lower() not in {"tl", "try", "usd", "eur", "gbp"}:
                 cleaned_title_parts.append(cleaned)
 
-        title = " ".join(cleaned_title_parts).strip()
+        title = _clean_statement_title(" ".join(cleaned_title_parts))
         if not title:
             title = "Ekstre İşlemi"
 
@@ -1233,6 +1706,33 @@ def dashboard(
         )
 
     saving = income - expense
+    opening_balances = (
+        db.query(AccountBalance)
+        .filter(AccountBalance.user_id == current_user.id)
+        .order_by(AccountBalance.balance_date.desc(), AccountBalance.id.desc())
+        .all()
+    )
+    latest_balance_by_institution: dict[str, AccountBalance] = {}
+    for opening_balance in opening_balances:
+        latest_balance_by_institution.setdefault(
+            opening_balance.institution_name,
+            opening_balance,
+        )
+
+    if latest_balance_by_institution:
+        balance = sum(
+            float(balance.balance)
+            for balance in latest_balance_by_institution.values()
+        )
+        for item in items:
+            if (item.source_type or "bank") == "credit_card":
+                continue
+            institution_name = (item.institution_name or "Bilinmiyor").strip()
+            opening_balance = latest_balance_by_institution.get(institution_name)
+            if opening_balance is None or item.date >= opening_balance.balance_date:
+                balance += float(item.amount or 0)
+    else:
+        balance = saving
 
     if income <= 0:
         risk = "High"
@@ -1249,6 +1749,7 @@ def dashboard(
         "income": round(income, 2),
         "expense": round(expense, 2),
         "saving": round(saving, 2),
+        "balance": round(balance, 2),
         "risk": risk,
         "recent_transactions": recent_transactions[:3],
     }
@@ -1311,16 +1812,21 @@ async def upload_pdf(
     file: UploadFile = File(...),
     statement_type: str = Form("bank"),
     institution_name: str = Form(""),
+    statement_date: date | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     statement_type = (statement_type or "bank").strip().lower()
     if statement_type not in {"bank", "credit_card"}:
         raise HTTPException(status_code=400, detail="Geçersiz ekstre tipi")
+    if statement_date is not None and statement_date > date.today():
+        raise HTTPException(status_code=400, detail="Ekstre tarihi gelecekte olamaz")
 
     original_name = os.path.basename(file.filename or "")
     if not original_name.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Sadece PDF dosyaları kabul edilir")
+    if len(original_name) > 255:
+        raise HTTPException(status_code=400, detail="Ekstre adı 255 karakteri geçemez")
 
     os.makedirs("uploads", exist_ok=True)
     # Kullanıcının gönderdiği dosya adı hiçbir zaman path olarak kullanılmıyor
@@ -1356,6 +1862,9 @@ async def upload_pdf(
         )
 
         if existing_upload is not None:
+            existing_upload.filename = original_name
+            if statement_date is not None:
+                existing_upload.statement_date = statement_date
             # Aynı içerik daha önce yüklenmiş olabilir. Eski sürümde yanlış türle
             # kaydedilmiş kayıtları düzeltmek için PDF içeriğini yeniden doğrula.
             existing_text = ""
@@ -1376,6 +1885,11 @@ async def upload_pdf(
                     refreshed_transactions,
                     statement_type,
                 )
+                _apply_learned_merchant_categories(
+                    db,
+                    current_user.id,
+                    refreshed_transactions,
+                )
                 _validate_transaction_dates(refreshed_transactions)
             except HTTPException:
                 raise
@@ -1386,6 +1900,10 @@ async def upload_pdf(
                     os.remove(file_path)
 
             detected_existing_type = _detect_statement_type(existing_text)
+            existing_upload.institution_name = _detect_institution_name(
+                existing_text,
+                institution_name,
+            )
             if detected_existing_type is not None:
                 _validate_statement_type(statement_type, detected_existing_type)
             else:
@@ -1394,7 +1912,7 @@ async def upload_pdf(
                     existing_upload.statement_type or "bank",
                 )
 
-            if existing_upload.statement_type != statement_type:
+            if existing_upload.statement_type != statement_type or statement_date is not None:
                 existing_upload.statement_type = statement_type
                 for item in existing_upload.items:
                     item.source_type = statement_type
@@ -1402,7 +1920,7 @@ async def upload_pdf(
                         linked_transaction = db.get(Transaction, item.transaction_id)
                         if linked_transaction is not None:
                             linked_transaction.source_type = statement_type
-                db.commit()
+            db.commit()
 
             _validate_statement_type(
                 statement_type,
@@ -1433,6 +1951,10 @@ async def upload_pdf(
             if stale_notice_items or (pending_items and refreshed_transactions):
                 db.commit()
             items = [_serialize_pdf_item(item) for item in existing_upload.items]
+            detected_period = _infer_statement_period(
+                refreshed_transactions
+                or [{"date": item.date} for item in existing_upload.items]
+            )
             return {
                 "success": True,
                 "duplicate": True,
@@ -1443,6 +1965,12 @@ async def upload_pdf(
                 "parsed_transactions": items,
                 "parsed_count": len(items),
                 "institution_name": existing_upload.institution_name or "Bilinmiyor",
+                "statement_date": (
+                    existing_upload.statement_date.isoformat()
+                    if existing_upload.statement_date is not None
+                    else None
+                ),
+                "detected_period": detected_period,
             }
 
         warnings: List[str] = []
@@ -1486,7 +2014,13 @@ async def upload_pdf(
         _validate_statement_type(statement_type, _detect_statement_type(text))
         parsed_transactions = _dedupe_transactions(parsed_transactions)
         parsed_transactions = _normalize_statement_signs(parsed_transactions, statement_type)
+        _apply_learned_merchant_categories(
+            db,
+            current_user.id,
+            parsed_transactions,
+        )
         _validate_transaction_dates(parsed_transactions)
+        detected_period = _infer_statement_period(parsed_transactions)
         detected_institution = _detect_institution_name(text, institution_name)
 
         upload = PdfUpload(
@@ -1494,7 +2028,8 @@ async def upload_pdf(
             filename=original_name,
             file_hash=content_hash,
             statement_type=statement_type,
-                    institution_name=detected_institution,
+            institution_name=detected_institution,
+            statement_date=statement_date,
         )
         for candidate in parsed_transactions:
             upload.items.append(
@@ -1531,6 +2066,8 @@ async def upload_pdf(
             "parsed_transactions": items,
             "parsed_count": len(items),
             "institution_name": detected_institution,
+            "statement_date": statement_date.isoformat() if statement_date else None,
+            "detected_period": detected_period,
         }
 
     except HTTPException:
@@ -1579,6 +2116,7 @@ def list_pdf_uploads(
                 skipped_count=statuses.count("skipped"),
                 pending_count=statuses.count("pending"),
                 institution_name=upload.institution_name or "Bilinmiyor",
+                statement_date=upload.statement_date,
             )
         )
     return summaries
@@ -1596,6 +2134,7 @@ def get_pdf_upload(
         filename=upload.filename,
         uploaded_at=upload.uploaded_at,
         institution_name=upload.institution_name or "Bilinmiyor",
+        statement_date=upload.statement_date,
         items=list(upload.items),
     )
 
@@ -1639,6 +2178,13 @@ def decide_pdf_upload_item(
                 item.source_type = normalized_source
                 if linked_transaction is not None:
                     linked_transaction.source_type = normalized_source
+            if payload.learn_category and payload.category is not None and payload.category.strip():
+                _remember_merchant_category(
+                    db,
+                    current_user.id,
+                    item.title,
+                    item.category,
+                )
             db.commit()
             db.refresh(item)
             return item
@@ -1655,6 +2201,14 @@ def decide_pdf_upload_item(
                 item.category = normalized_category
         if normalized_source:
             item.source_type = normalized_source
+
+        if payload.learn_category and payload.category is not None and payload.category.strip():
+            _remember_merchant_category(
+                db,
+                current_user.id,
+                item.title,
+                item.category,
+            )
 
         new_transaction = Transaction(
             user_id=current_user.id,
@@ -1686,6 +2240,74 @@ def decide_pdf_upload_item(
     return item
 
 
+@app.get(
+    "/merchant-category-rules",
+    response_model=List[MerchantCategoryRuleOut],
+)
+def list_merchant_category_rules(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return (
+        db.query(MerchantCategoryRule)
+        .filter(MerchantCategoryRule.user_id == current_user.id)
+        .order_by(MerchantCategoryRule.merchant_key.asc())
+        .all()
+    )
+
+
+@app.put(
+    "/merchant-category-rules/{rule_id}",
+    response_model=MerchantCategoryRuleOut,
+)
+def update_merchant_category_rule(
+    rule_id: int,
+    payload: MerchantCategoryRuleUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if payload.category not in _LEARNABLE_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Geçersiz kategori")
+
+    rule = (
+        db.query(MerchantCategoryRule)
+        .filter(
+            MerchantCategoryRule.id == rule_id,
+            MerchantCategoryRule.user_id == current_user.id,
+        )
+        .first()
+    )
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Kategori tercihi bulunamadı")
+
+    rule.category = payload.category
+    db.commit()
+    db.refresh(rule)
+    return rule
+
+
+@app.delete("/merchant-category-rules/{rule_id}")
+def delete_merchant_category_rule(
+    rule_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    rule = (
+        db.query(MerchantCategoryRule)
+        .filter(
+            MerchantCategoryRule.id == rule_id,
+            MerchantCategoryRule.user_id == current_user.id,
+        )
+        .first()
+    )
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Kategori tercihi bulunamadı")
+
+    db.delete(rule)
+    db.commit()
+    return {"success": True}
+
+
 @app.get("/transactions", response_model=List[TransactionOut])
 def transactions(
     db: Session = Depends(get_db),
@@ -1697,7 +2319,20 @@ def transactions(
         .order_by(Transaction.date.desc(), Transaction.id.desc())
         .all()
     )
-    return items
+    return [
+        {
+            "id": item.id,
+            "title": _clean_statement_title(item.title),
+            "description": _clean_statement_title(item.description or ""),
+            "amount": item.amount,
+            "category": item.category,
+            "date": item.date,
+            "source_type": item.source_type,
+            "transaction_type": item.transaction_type,
+            "institution_name": item.institution_name,
+        }
+        for item in items
+    ]
 
 
 def _get_owned_plan(db: Session, current_user: User, plan_id: int) -> Plan:
@@ -1709,6 +2344,177 @@ def _get_owned_plan(db: Session, current_user: User, plan_id: int) -> Plan:
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan bulunamadı")
     return plan
+
+
+@app.get("/account-balances", response_model=List[AccountBalanceOut])
+def list_account_balances(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return (
+        db.query(AccountBalance)
+        .filter(AccountBalance.user_id == current_user.id)
+        .order_by(AccountBalance.balance_date.desc(), AccountBalance.id.desc())
+        .all()
+    )
+
+
+@app.post("/account-balances", response_model=AccountBalanceOut, status_code=201)
+def save_account_balance(
+    payload: AccountBalanceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    institution_name = payload.institution_name.strip()
+    if not institution_name:
+        raise HTTPException(status_code=400, detail="Banka veya hesap adı zorunludur")
+    if len(institution_name) > 120:
+        raise HTTPException(status_code=400, detail="Banka veya hesap adı 120 karakteri geçemez")
+    if payload.balance_date > date.today():
+        raise HTTPException(status_code=400, detail="Bakiye tarihi gelecekte olamaz")
+
+    previous_institution_name = (payload.previous_institution_name or "").strip()
+    if previous_institution_name and payload.previous_balance_date is not None:
+        previous_balance = (
+            db.query(AccountBalance)
+            .filter(
+                AccountBalance.user_id == current_user.id,
+                AccountBalance.institution_name == previous_institution_name,
+                AccountBalance.balance_date == payload.previous_balance_date,
+            )
+            .first()
+        )
+        if (
+            previous_balance is not None
+            and (
+                previous_institution_name != institution_name
+                or payload.previous_balance_date != payload.balance_date
+            )
+        ):
+            db.delete(previous_balance)
+
+    balance = (
+        db.query(AccountBalance)
+        .filter(
+            AccountBalance.user_id == current_user.id,
+            AccountBalance.institution_name == institution_name,
+            AccountBalance.balance_date == payload.balance_date,
+        )
+        .first()
+    )
+    if balance is None:
+        balance = AccountBalance(
+            user_id=current_user.id,
+            institution_name=institution_name,
+            balance=payload.balance,
+            balance_date=payload.balance_date,
+        )
+        db.add(balance)
+    else:
+        balance.balance = payload.balance
+
+    db.commit()
+    db.refresh(balance)
+    return balance
+
+
+def _category_budget_statuses(
+    db: Session,
+    current_user: User,
+    budgets: List[CategoryBudget],
+) -> List[dict[str, Any]]:
+    today = date.today()
+    month_start = today.replace(day=1)
+    if today.month == 12:
+        next_month = date(today.year + 1, 1, 1)
+    else:
+        next_month = date(today.year, today.month + 1, 1)
+
+    transactions = (
+        db.query(Transaction)
+        .filter(
+            Transaction.user_id == current_user.id,
+            Transaction.date >= month_start,
+            Transaction.date < next_month,
+            Transaction.transaction_type == "expense",
+            Transaction.amount < 0,
+        )
+        .all()
+    )
+    spent_by_category: dict[str, float] = defaultdict(float)
+    for transaction in transactions:
+        spent_by_category[transaction.category or "Diğer"] += abs(
+            float(transaction.amount)
+        )
+
+    statuses = []
+    for budget in budgets:
+        limit = float(budget.monthly_limit)
+        spent = spent_by_category.get(budget.category, 0.0)
+        statuses.append(
+            {
+                "id": budget.id,
+                "category": budget.category,
+                "monthly_limit": budget.monthly_limit,
+                "warning_percent": budget.warning_percent,
+                "spent_this_month": round(spent, 2),
+                "percent_used": round((spent / limit) * 100, 2) if limit > 0 else 0.0,
+            }
+        )
+    return statuses
+
+
+@app.get("/category-budgets", response_model=List[CategoryBudgetOut])
+def list_category_budgets(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    budgets = (
+        db.query(CategoryBudget)
+        .filter(CategoryBudget.user_id == current_user.id)
+        .order_by(CategoryBudget.category.asc())
+        .all()
+    )
+    return _category_budget_statuses(db, current_user, budgets)
+
+
+@app.post("/category-budgets", response_model=CategoryBudgetOut)
+def save_category_budget(
+    payload: CategoryBudgetCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    category = payload.category.strip()
+    if category not in _LEARNABLE_CATEGORIES:
+        raise HTTPException(status_code=400, detail="Geçersiz kategori")
+    if payload.monthly_limit <= 0:
+        raise HTTPException(status_code=400, detail="Aylık limit sıfırdan büyük olmalı")
+    if not 1 <= payload.warning_percent <= 100:
+        raise HTTPException(status_code=400, detail="Uyarı yüzdesi 1 ile 100 arasında olmalı")
+
+    budget = (
+        db.query(CategoryBudget)
+        .filter(
+            CategoryBudget.user_id == current_user.id,
+            CategoryBudget.category == category,
+        )
+        .first()
+    )
+    if budget is None:
+        budget = CategoryBudget(
+            user_id=current_user.id,
+            category=category,
+            monthly_limit=payload.monthly_limit,
+            warning_percent=payload.warning_percent,
+        )
+        db.add(budget)
+    else:
+        budget.monthly_limit = payload.monthly_limit
+        budget.warning_percent = payload.warning_percent
+
+    db.commit()
+    db.refresh(budget)
+    return _category_budget_statuses(db, current_user, [budget])[0]
 
 
 def _serialize_plan(plan: Plan) -> dict[str, Any]:
@@ -1792,6 +2598,48 @@ def create_plan(
     db.commit()
     db.refresh(plan)
     return _serialize_plan(plan)
+
+
+@app.post("/financial-goal")
+def save_financial_goal(
+    payload: FinancialGoalCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Hedef adı boş olamaz")
+    if len(name) > 160:
+        raise HTTPException(status_code=400, detail="Hedef adı 160 karakteri geçemez")
+    if payload.target_amount <= 0:
+        raise HTTPException(status_code=400, detail="Hedef tutarı sıfırdan büyük olmalı")
+
+    goal = (
+        db.query(Plan)
+        .filter(
+            Plan.user_id == current_user.id,
+            Plan.plan_type == "budget",
+            Plan.notes == "financial_goal",
+        )
+        .first()
+    )
+    if goal is None:
+        goal = Plan(
+            user_id=current_user.id,
+            name=name,
+            plan_type="budget",
+            target_amount=payload.target_amount,
+            start_date=date.today(),
+            notes="financial_goal",
+        )
+        db.add(goal)
+    else:
+        goal.name = name
+        goal.target_amount = payload.target_amount
+
+    db.commit()
+    db.refresh(goal)
+    return _serialize_plan(goal)
 
 
 @app.post("/plans/{plan_id}/entries", status_code=201)

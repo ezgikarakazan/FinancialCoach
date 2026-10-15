@@ -7,10 +7,49 @@ import '../services/api_service.dart';
 import 'pdf_history_screen.dart';
 
 class UploadScreen extends StatefulWidget {
-  const UploadScreen({super.key});
+  final String? initialInstitutionName;
+  final DateTime? initialStatementDate;
+  final String? initialOpeningBalance;
+
+  const UploadScreen({
+    super.key,
+    this.initialInstitutionName,
+    this.initialStatementDate,
+    this.initialOpeningBalance,
+  });
 
   @override
   State<UploadScreen> createState() => _UploadScreenState();
+}
+
+class _UploadSectionLabel extends StatelessWidget {
+  final String title;
+  final IconData icon;
+  final Color color;
+
+  const _UploadSectionLabel({
+    required this.title,
+    required this.icon,
+    required this.color,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: color),
+        const SizedBox(width: 8),
+        Text(
+          title,
+          style: TextStyle(
+            color: color,
+            fontWeight: FontWeight.w700,
+            fontSize: 14,
+          ),
+        ),
+      ],
+    );
+  }
 }
 
 class _UploadScreenState extends State<UploadScreen> {
@@ -20,12 +59,21 @@ class _UploadScreenState extends State<UploadScreen> {
   int _skippedCount = 0;
   int? _currentUploadId;
   String _uploadedFileName = '';
+  String? _detectedStatementPeriod;
   String _statementType = 'bank';
   String? _emptyStateOverrideMessage;
+  DateTime? _statementDate;
+  String? _savedBalanceInstitutionName;
+  DateTime? _savedBalanceDate;
   List<Map<String, dynamic>> _candidateTransactions = [];
   bool _isProcessing = false;
   bool _isDeciding = false;
+  late Future<List<dynamic>> _uploadsFuture;
   final TextEditingController _institutionController = TextEditingController();
+  final TextEditingController _openingBalanceController =
+      TextEditingController();
+  final TextEditingController _statementNameController =
+      TextEditingController();
 
   static const List<String> _categories = [
     'Alışveriş',
@@ -40,9 +88,32 @@ class _UploadScreenState extends State<UploadScreen> {
   ];
 
   @override
+  void initState() {
+    super.initState();
+    _institutionController.text = widget.initialInstitutionName ?? '';
+    _openingBalanceController.text = widget.initialOpeningBalance ?? '';
+    _statementNameController.text = '';
+    _statementDate = widget.initialStatementDate;
+    if (widget.initialOpeningBalance?.trim().isNotEmpty == true) {
+      _savedBalanceInstitutionName = widget.initialInstitutionName;
+      _savedBalanceDate = widget.initialStatementDate;
+    }
+    _uploadsFuture = ApiService.getPdfUploads();
+  }
+
+  @override
   void dispose() {
     _institutionController.dispose();
+    _openingBalanceController.dispose();
+    _statementNameController.dispose();
     super.dispose();
+  }
+
+  void _refreshUploadHistory() {
+    if (!mounted) return;
+    setState(() {
+      _uploadsFuture = ApiService.getPdfUploads();
+    });
   }
 
   Future<void> _pickPdf([String? statementType]) async {
@@ -59,6 +130,9 @@ class _UploadScreenState extends State<UploadScreen> {
       final bytes = file.bytes;
       if (bytes == null || bytes.isEmpty) {
         throw Exception('Dosya verisi okunamadı');
+      }
+      if (_statementNameController.text.trim().isEmpty) {
+        _statementNameController.text = file.name;
       }
 
       if (!mounted) return;
@@ -89,11 +163,40 @@ class _UploadScreenState extends State<UploadScreen> {
     setState(() => _isProcessing = true);
 
     try {
+      final openingBalanceText = statementType == 'bank'
+          ? _openingBalanceController.text.trim()
+          : '';
+      if (openingBalanceText.isNotEmpty) {
+        final institutionName = _institutionController.text.trim();
+        final openingBalance = double.tryParse(
+          openingBalanceText.replaceAll(',', '.'),
+        );
+        if (institutionName.isEmpty || _statementDate == null) {
+          throw Exception(
+            'Başlangıç bakiyesi için banka adını ve ekstre tarihini seçin.',
+          );
+        }
+        if (openingBalance == null) {
+          throw Exception('Geçerli bir başlangıç bakiyesi girin.');
+        }
+        await ApiService.saveAccountBalance(
+          institutionName: institutionName,
+          balance: openingBalance,
+          balanceDate: _statementDate!,
+          previousInstitutionName: _savedBalanceInstitutionName,
+          previousBalanceDate: _savedBalanceDate,
+        );
+        _savedBalanceInstitutionName = institutionName;
+        _savedBalanceDate = _statementDate;
+      }
+
+      final statementName = _normalizedStatementName(fileName);
       final response = await ApiService.uploadPdf(
         bytes: bytes,
-        fileName: fileName,
+        fileName: statementName,
         statementType: statementType,
         institutionName: _institutionController.text.trim(),
+        statementDate: _statementDate,
       );
 
       final isDuplicate = response['duplicate'] == true;
@@ -120,11 +223,14 @@ class _UploadScreenState extends State<UploadScreen> {
         _addedCount = addedSoFar;
         _skippedCount = skippedSoFar;
         _reviewIndex = 0;
-        _uploadedFileName = fileName;
+        _uploadedFileName = statementName;
+        _statementNameController.text = statementName;
+        _detectedStatementPeriod = response['detected_period']?.toString();
         _emptyStateOverrideMessage = (isDuplicate && reviewCandidates.isEmpty)
             ? "Bu PDF'i daha önce yükledin ve tüm işlemler zaten incelenmiş. Geçmişten tekrar bakabilirsin."
             : null;
         _currentStep = reviewCandidates.isEmpty ? 2 : 1;
+        _uploadsFuture = ApiService.getPdfUploads();
       });
 
       if (isDuplicate && mounted) {
@@ -145,6 +251,14 @@ class _UploadScreenState extends State<UploadScreen> {
     }
   }
 
+  String _normalizedStatementName(String fallbackName) {
+    final name = _statementNameController.text.trim();
+    final selectedName = name.isEmpty ? fallbackName : name;
+    return selectedName.toLowerCase().endsWith('.pdf')
+        ? selectedName
+        : '$selectedName.pdf';
+  }
+
   void _showUploadError(Object error) {
     final message = error
         .toString()
@@ -163,11 +277,14 @@ class _UploadScreenState extends State<UploadScreen> {
                     ? 'Kredi kartını seç'
                     : 'Banka ekstresini seç',
                 onPressed: () {
-                  setState(
-                    () => _statementType = isCreditCardMessage
+                  setState(() {
+                    _statementType = isCreditCardMessage
                         ? 'credit_card'
-                        : 'bank',
-                  );
+                        : 'bank';
+                    if (_statementType == 'credit_card') {
+                      _openingBalanceController.clear();
+                    }
+                  });
                 },
               )
             : null,
@@ -211,6 +328,7 @@ class _UploadScreenState extends State<UploadScreen> {
         'description': description,
         'amount': amount,
         'category': category,
+        'learn_category': false,
         'source_type': item['source_type']?.toString() ?? _statementType,
         'status': status,
       });
@@ -246,6 +364,7 @@ class _UploadScreenState extends State<UploadScreen> {
         description: shouldAdd ? tx['description'] as String : null,
         category: shouldAdd ? tx['category'] as String : null,
         sourceType: shouldAdd ? tx['source_type'] as String : null,
+        learnCategory: shouldAdd && tx['learn_category'] == true,
       );
       if (shouldAdd && tx['category'] == 'Yatırım') {
         await _saveInvestmentFromTransaction(tx);
@@ -264,6 +383,7 @@ class _UploadScreenState extends State<UploadScreen> {
         } else {
           _currentStep = 3;
         }
+        _uploadsFuture = ApiService.getPdfUploads();
       });
     } catch (e) {
       if (mounted) {
@@ -278,13 +398,16 @@ class _UploadScreenState extends State<UploadScreen> {
 
   String _investmentTypeForTitle(String title) {
     final normalized = title.toLowerCase();
-    if (normalized.contains('altın') || normalized.contains('altin') || normalized.contains('gold')) {
+    if (normalized.contains('altın') ||
+        normalized.contains('altin') ||
+        normalized.contains('gold')) {
       return 'Altın';
     }
     if (normalized.contains('hisse')) return 'Hisse';
     if (normalized.contains('fon')) return 'Fon';
     if (normalized.contains('kripto')) return 'Kripto';
-    if (normalized.contains('döviz') || normalized.contains('doviz')) return 'Döviz';
+    if (normalized.contains('döviz') || normalized.contains('doviz'))
+      return 'Döviz';
     return 'Diğer';
   }
 
@@ -292,7 +415,10 @@ class _UploadScreenState extends State<UploadScreen> {
     final prefs = await SharedPreferences.getInstance();
     final decoded = jsonDecode(prefs.getString('investments_v1') ?? '[]');
     final investments = decoded is List
-        ? decoded.whereType<Map>().map((item) => Map<String, dynamic>.from(item)).toList()
+        ? decoded
+              .whereType<Map>()
+              .map((item) => Map<String, dynamic>.from(item))
+              .toList()
         : <Map<String, dynamic>>[];
     final uploadId = _currentUploadId!;
     final itemId = tx['id'] as int;
@@ -332,6 +458,7 @@ class _UploadScreenState extends State<UploadScreen> {
     var selectedSourceType = tx['source_type'] == 'credit_card'
         ? 'credit_card'
         : 'bank';
+    var categoryWasExplicitlyChanged = tx['learn_category'] == true;
 
     final result = await showDialog<bool>(
       context: context,
@@ -371,7 +498,10 @@ class _UploadScreenState extends State<UploadScreen> {
                     .toList(),
                 onChanged: (value) {
                   if (value != null) {
-                    setDialogState(() => selectedCategory = value);
+                    setDialogState(() {
+                      selectedCategory = value;
+                      categoryWasExplicitlyChanged = true;
+                    });
                   }
                 },
               ),
@@ -406,6 +536,7 @@ class _UploadScreenState extends State<UploadScreen> {
                 tx['title'] = title;
                 tx['description'] = descriptionController.text.trim();
                 tx['category'] = selectedCategory;
+                tx['learn_category'] = categoryWasExplicitlyChanged;
                 tx['source_type'] = selectedSourceType;
                 Navigator.pop(dialogContext, true);
               },
@@ -417,7 +548,7 @@ class _UploadScreenState extends State<UploadScreen> {
     );
 
     titleController.dispose();
-  descriptionController.dispose();
+    descriptionController.dispose();
     return result == true;
   }
 
@@ -480,9 +611,97 @@ class _UploadScreenState extends State<UploadScreen> {
       _skippedCount = 0;
       _currentUploadId = null;
       _uploadedFileName = '';
+      _detectedStatementPeriod = null;
+      _statementNameController.clear();
       _emptyStateOverrideMessage = null;
       _candidateTransactions = [];
+      _uploadsFuture = ApiService.getPdfUploads();
     });
+  }
+
+  Future<void> _resumeUpload(Map<String, dynamic> upload) async {
+    final rawId = upload['id'];
+    final uploadId = rawId is int
+        ? rawId
+        : int.tryParse(rawId?.toString() ?? '');
+    if (uploadId == null || _isProcessing) return;
+
+    setState(() => _isProcessing = true);
+    try {
+      final detail = await ApiService.getPdfUploadDetail(uploadId);
+      if (!mounted) return;
+      final rawItems = detail['items'] as List<dynamic>? ?? [];
+      final pendingItems = rawItems.where((item) {
+        return item is Map && item['status'] == 'pending';
+      }).toList();
+
+      if (pendingItems.isEmpty) {
+        _refreshUploadHistory();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Bu dosyada bekleyen işlem kalmamış.'),
+            ),
+          );
+        }
+        return;
+      }
+
+      final firstPending = pendingItems.first as Map;
+      final sourceType = firstPending['source_type']?.toString();
+      setState(() {
+        _statementType = sourceType == 'credit_card' ? 'credit_card' : 'bank';
+        _currentUploadId = uploadId;
+        _uploadedFileName =
+            detail['filename']?.toString() ??
+            upload['filename']?.toString() ??
+            'PDF ekstresi';
+        _candidateTransactions = _parseCandidatesFromResponse({
+          'parsed_transactions': pendingItems,
+        });
+        _addedCount = (upload['added_count'] as num?)?.toInt() ?? 0;
+        _skippedCount = (upload['skipped_count'] as num?)?.toInt() ?? 0;
+        _reviewIndex = 0;
+        _emptyStateOverrideMessage = null;
+        _currentStep = _candidateTransactions.isEmpty ? 0 : 1;
+      });
+      if (_candidateTransactions.isEmpty && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Bekleyen işlemler okunamadı. Lütfen tekrar deneyin.',
+            ),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(e.toString().replaceFirst('Exception: ', ''))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isProcessing = false);
+    }
+  }
+
+  Future<void> _openUploadDetail(Map<String, dynamic> upload) async {
+    final rawId = upload['id'];
+    final uploadId = rawId is int
+        ? rawId
+        : int.tryParse(rawId?.toString() ?? '');
+    if (uploadId == null) return;
+
+    await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => PdfUploadDetailScreen(
+          uploadId: uploadId,
+          filename: upload['filename']?.toString() ?? '',
+        ),
+      ),
+    );
+    _refreshUploadHistory();
   }
 
   void _openHistory() {
@@ -604,6 +823,21 @@ class _UploadScreenState extends State<UploadScreen> {
           ),
           const SizedBox(height: 24),
           TextField(
+            controller: _statementNameController,
+            maxLength: 255,
+            textCapitalization: TextCapitalization.sentences,
+            decoration: InputDecoration(
+              labelText: 'Ekstre adı',
+              hintText: 'Dosyayı seçince PDF adı otomatik gelir',
+              prefixIcon: const Icon(Icons.drive_file_rename_outline),
+              counterText: '',
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(14),
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
             controller: _institutionController,
             decoration: InputDecoration(
               labelText: 'Banka veya kart kurumu (isteğe bağlı)',
@@ -612,6 +846,49 @@ class _UploadScreenState extends State<UploadScreen> {
               border: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(14),
               ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (_statementType == 'bank') ...[
+            const SizedBox(height: 14),
+            TextField(
+              controller: _openingBalanceController,
+              keyboardType: const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              decoration: InputDecoration(
+                labelText:
+                    'Ekstre tarihindeki başlangıç bakiyesi (isteğe bağlı)',
+                hintText: 'Örn. 12500,50',
+                prefixIcon: const Icon(Icons.account_balance_wallet_outlined),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 14),
+          OutlinedButton.icon(
+            onPressed: _isProcessing
+                ? null
+                : () async {
+                    final picked = await showDatePicker(
+                      context: context,
+                      initialDate: _statementDate ?? DateTime.now(),
+                      firstDate: DateTime(2000),
+                      lastDate: DateTime.now(),
+                    );
+                    if (picked != null && mounted) {
+                      setState(() => _statementDate = picked);
+                    }
+                  },
+            icon: const Icon(Icons.event_outlined),
+            label: Text(
+              _statementDate == null
+                  ? 'Ekstre tarihini seç (isteğe bağlı)'
+                  : 'Ekstre tarihi: ${_statementDate!.day.toString().padLeft(2, '0')}.'
+                        '${_statementDate!.month.toString().padLeft(2, '0')}.'
+                        '${_statementDate!.year}',
             ),
           ),
           const SizedBox(height: 18),
@@ -658,6 +935,8 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 28),
+          _buildRecentUploadsSection(theme),
           const SizedBox(height: 32),
           Container(
             padding: const EdgeInsets.all(18),
@@ -692,6 +971,220 @@ class _UploadScreenState extends State<UploadScreen> {
     );
   }
 
+  Widget _buildRecentUploadsSection(ThemeData theme) {
+    return FutureBuilder<List<dynamic>>(
+      future: _uploadsFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 20),
+            child: Center(
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFFCF6),
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(color: const Color(0xFFE8DFD3)),
+            ),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Son yüklenen dosyalar alınamadı.',
+                    style: TextStyle(color: Color(0xFF64716B)),
+                  ),
+                ),
+                TextButton(
+                  onPressed: _refreshUploadHistory,
+                  child: const Text('Tekrar dene'),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final uploads = (snapshot.data ?? [])
+            .whereType<Map>()
+            .map((upload) => Map<String, dynamic>.from(upload))
+            .toList();
+        if (uploads.isEmpty) return const SizedBox.shrink();
+
+        final pendingUploads = uploads
+            .where((upload) {
+              return ((upload['pending_count'] as num?)?.toInt() ?? 0) > 0;
+            })
+            .take(3)
+            .toList();
+        final completedUploads = uploads
+            .where((upload) {
+              return ((upload['pending_count'] as num?)?.toInt() ?? 0) == 0;
+            })
+            .take(3)
+            .toList();
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Son yüklenen dosyalar', style: theme.textTheme.headlineSmall),
+            if (pendingUploads.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              const _UploadSectionLabel(
+                title: 'Devam edilecekler',
+                icon: Icons.pending_actions_rounded,
+                color: Color(0xFFC96B3B),
+              ),
+              const SizedBox(height: 10),
+              ...pendingUploads.map(
+                (upload) => _buildUploadHistoryCard(upload, isPending: true),
+              ),
+            ],
+            if (completedUploads.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              const _UploadSectionLabel(
+                title: 'Tamamlananlar',
+                icon: Icons.check_circle_outline_rounded,
+                color: Color(0xFF1E6B52),
+              ),
+              const SizedBox(height: 10),
+              ...completedUploads.map(
+                (upload) => _buildUploadHistoryCard(upload, isPending: false),
+              ),
+            ],
+            if (uploads.length > 3 ||
+                uploads.any(
+                  (upload) => (upload['pending_count'] as num?)?.toInt() == 0,
+                ))
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _openHistory,
+                  icon: const Icon(Icons.history_rounded, size: 18),
+                  label: const Text('Tüm PDF geçmişi'),
+                ),
+              ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildUploadHistoryCard(
+    Map<String, dynamic> upload, {
+    required bool isPending,
+  }) {
+    final filename = upload['filename']?.toString() ?? 'PDF ekstresi';
+    final pending = (upload['pending_count'] as num?)?.toInt() ?? 0;
+    final added = (upload['added_count'] as num?)?.toInt() ?? 0;
+    final skipped = (upload['skipped_count'] as num?)?.toInt() ?? 0;
+    final uploadedAt = upload['uploaded_at']?.toString() ?? '';
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFCF6),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE8DFD3)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 42,
+            height: 42,
+            decoration: BoxDecoration(
+              color:
+                  (isPending
+                          ? const Color(0xFFC96B3B)
+                          : const Color(0xFF1E6B52))
+                      .withOpacity(0.1),
+              borderRadius: BorderRadius.circular(13),
+            ),
+            child: Icon(
+              isPending
+                  ? Icons.picture_as_pdf_outlined
+                  : Icons.task_alt_rounded,
+              color: isPending
+                  ? const Color(0xFFC96B3B)
+                  : const Color(0xFF1E6B52),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  filename,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1E2722),
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  isPending
+                      ? '$pending işlem bekliyor · $added eklendi'
+                      : '$added eklendi · $skipped atlandı',
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF7B887F),
+                  ),
+                ),
+                if (uploadedAt.isNotEmpty) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    _formatUploadDate(uploadedAt),
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9B8C7E),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          isPending
+              ? FilledButton(
+                  onPressed: () => _resumeUpload(upload),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: const Color(0xFF1E6B52),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                  ),
+                  child: const Text('Devam et'),
+                )
+              : IconButton(
+                  onPressed: () => _openUploadDetail(upload),
+                  tooltip: 'Ayrıntıları gör',
+                  icon: const Icon(
+                    Icons.chevron_right_rounded,
+                    color: Color(0xFF7B887F),
+                  ),
+                ),
+        ],
+      ),
+    );
+  }
+
+  String _formatUploadDate(String value) {
+    final date = DateTime.tryParse(value);
+    if (date == null) return value;
+    return '${date.day.toString().padLeft(2, '0')}.'
+        '${date.month.toString().padLeft(2, '0')}.${date.year}';
+  }
+
   Widget _buildTypeSelectorButton({
     required String label,
     required String value,
@@ -704,7 +1197,12 @@ class _UploadScreenState extends State<UploadScreen> {
       borderRadius: BorderRadius.circular(12),
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
-        onTap: () => setState(() => _statementType = value),
+        onTap: () {
+          setState(() {
+            _statementType = value;
+            if (value == 'credit_card') _openingBalanceController.clear();
+          });
+        },
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 12),
           child: Row(
@@ -751,9 +1249,10 @@ class _UploadScreenState extends State<UploadScreen> {
         children: [
           Row(
             children: [
-              GestureDetector(
-                onTap: () => setState(() => _currentStep = 0),
-                child: const Icon(Icons.arrow_back_outlined, size: 24),
+              IconButton(
+                tooltip: 'Ekstre bilgilerini düzenle',
+                onPressed: () => setState(() => _currentStep = 0),
+                icon: const Icon(Icons.arrow_back_outlined),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -779,6 +1278,10 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
             ],
           ),
+          if (_detectedStatementPeriod != null) ...[
+            const SizedBox(height: 16),
+            _buildDetectedPeriodBanner(),
+          ],
           const SizedBox(height: 24),
           Container(
             width: double.infinity,
@@ -850,7 +1353,8 @@ class _UploadScreenState extends State<UploadScreen> {
                     ),
                   ],
                 ),
-                if ((tx['description']?.toString().trim() ?? '').isNotEmpty) ...[
+                if ((tx['description']?.toString().trim() ?? '')
+                    .isNotEmpty) ...[
                   const SizedBox(height: 4),
                   Text(
                     tx['description'].toString(),
@@ -987,6 +1491,61 @@ class _UploadScreenState extends State<UploadScreen> {
     );
   }
 
+  Widget _buildDetectedPeriodBanner() {
+    final selectedDate = _statementDate;
+    final selectedDateLabel = selectedDate == null
+        ? 'Ekstre tarihi henüz seçilmedi.'
+        : 'Seçilen ekstre tarihi: '
+              '${selectedDate.day.toString().padLeft(2, '0')}.'
+              '${selectedDate.month.toString().padLeft(2, '0')}.'
+              '${selectedDate.year}.';
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEAF2EC),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: const Color(0xFFD6E5DA)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(
+            Icons.auto_awesome_outlined,
+            color: Color(0xFF1E6B52),
+            size: 20,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'İşlem tarihlerine göre bu ekstre '
+                  '$_detectedStatementPeriod dönemine ait görünüyor.',
+                  style: const TextStyle(
+                    color: Color(0xFF1E6B52),
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$selectedDateLabel Dönem bilgisi PDF’deki işlemlerden çıkarıldı.',
+                  style: const TextStyle(
+                    color: Color(0xFF64716B),
+                    fontSize: 12,
+                    height: 1.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildStep2(ThemeData theme) {
     final message =
         _emptyStateOverrideMessage ??
@@ -1003,6 +1562,10 @@ class _UploadScreenState extends State<UploadScreen> {
         ),
         child: Column(
           children: [
+            if (_detectedStatementPeriod != null) ...[
+              _buildDetectedPeriodBanner(),
+              const SizedBox(height: 16),
+            ],
             Icon(
               _emptyStateOverrideMessage != null
                   ? Icons.folder_copy_outlined

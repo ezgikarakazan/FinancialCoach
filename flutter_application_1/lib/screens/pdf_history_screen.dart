@@ -189,6 +189,18 @@ class _PdfHistoryScreenState extends State<PdfHistoryScreen> {
                                     color: Color(0xFF7B887F),
                                   ),
                                 ),
+                                if ((upload['statement_date']?.toString() ?? '')
+                                    .isNotEmpty) ...[
+                                  const SizedBox(height: 3),
+                                  Text(
+                                    'Ekstre tarihi: ${_formatDate(upload['statement_date'].toString())} · '
+                                    '${upload['institution_name']?.toString() ?? 'Bilinmiyor'}',
+                                    style: const TextStyle(
+                                      fontSize: 12,
+                                      color: Color(0xFF7B887F),
+                                    ),
+                                  ),
+                                ],
                                 const SizedBox(height: 8),
                                 Wrap(
                                   spacing: 8,

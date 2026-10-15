@@ -130,6 +130,20 @@ def ensure_pdf_upload_statement_type_columns() -> None:
                 )
 
 
+def ensure_pdf_upload_statement_date_column() -> None:
+    """Ekstre geçmişine kullanıcının seçtiği ekstre tarihini ekler."""
+    inspector = inspect(engine)
+    if "pdf_uploads" not in inspector.get_table_names():
+        return
+
+    columns = [col["name"] for col in inspector.get_columns("pdf_uploads")]
+    if "statement_date" in columns:
+        return
+
+    with engine.begin() as connection:
+        connection.execute(text("ALTER TABLE pdf_uploads ADD COLUMN statement_date DATE"))
+
+
 def ensure_description_columns() -> None:
     """Eski işlem ve PDF öğelerine isteğe bağlı açıklama alanı ekler."""
     inspector = inspect(engine)
@@ -163,4 +177,3 @@ def ensure_plan_payment_day_column() -> None:
         connection.execute(
             text("ALTER TABLE plans ADD COLUMN payment_day INTEGER DEFAULT 1")
         )
-

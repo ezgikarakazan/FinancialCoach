@@ -1,518 +1,494 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 
-class PredictionScreen extends StatelessWidget {
+class PredictionScreen extends StatefulWidget {
   const PredictionScreen({super.key});
+
+  @override
+  State<PredictionScreen> createState() => _PredictionScreenState();
+}
+
+class _PredictionScreenState extends State<PredictionScreen> {
+  final TextEditingController _controller = TextEditingController();
+  final List<String> _quickPrompts = [
+    'Tasarruf için ne yapmalıyım?',
+    'Bu ay riskli bir durum var mı?',
+    'Plan hedefime nasıl yaklaşırım?',
+    'Harcama davranışımı özetle',
+  ];
+
+  bool _loading = true;
+  bool _sending = false;
+
+  Map<String, dynamic> _summary = {};
+  final List<Map<String, dynamic>> _messages = [
+    {
+      'role': 'assistant',
+      'text': 'Merhaba! Finansal görünümünü analiz edip sana net öneriler hazırlayayım.',
+    },
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSummary();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadSummary() async {
+    try {
+      final result = await ApiService.getAiCoachSummary(days: 30);
+      if (!mounted) return;
+      setState(() {
+        _summary = result;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+      });
+    }
+  }
+
+  Future<void> _submitPrompt([String? prompt]) async {
+    final text = (prompt ?? _controller.text).trim();
+    if (text.isEmpty || _sending) return;
+
+    _controller.clear();
+    setState(() {
+      _sending = true;
+      _messages.add({'role': 'user', 'text': text});
+    });
+
+    try {
+      final result = await ApiService.askAiCoach(message: text, days: 30);
+      if (!mounted) return;
+      final response = (result['response'] ?? 'Özet alınamadı.').toString();
+      setState(() {
+        _messages.add({'role': 'assistant', 'text': response});
+        if (result['summary'] is Map) {
+          _summary = Map<String, dynamic>.from(result['summary'] as Map);
+        }
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _messages.add({
+          'role': 'assistant',
+          'text': 'Şu an cevap üretilemedi. Lütfen bir dakika sonra tekrar deneyin.',
+        });
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _sending = false;
+        });
+      }
+    }
+  }
 
   String _formatMoney(dynamic value) {
     final number = (value as num?)?.toDouble() ?? 0;
-    return "₺${number.toStringAsFixed(2)}";
-  }
-
-  Color _confidenceColor(int confidence) {
-    if (confidence >= 80) return const Color(0xFF1E6B52);
-    if (confidence >= 60) return const Color(0xFFC96B3B);
-    return const Color(0xFFB04242);
-  }
-
-  String _confidenceLabel(int confidence) {
-    if (confidence >= 80) return "Yüksek";
-    if (confidence >= 60) return "Orta";
-    return "Düşük";
+    return '₺${number.toStringAsFixed(2)}';
   }
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
+    final summary = _summary;
+    final totalIncome = (summary['total_income'] as num?)?.toDouble() ?? 0;
+    final totalExpense = (summary['total_expense'] as num?)?.toDouble() ?? 0;
+    final netSaving = (summary['net_saving'] as num?)?.toDouble() ?? 0;
+    final risk = (summary['risk_level'] ?? 'Düşük').toString();
+    final recommendations = (summary['recommendations'] as List<dynamic>? ?? [])
+        .map((item) => item.toString())
+        .toList();
+    final topCategories = (summary['top_categories'] as List<dynamic>? ?? []);
 
     return Scaffold(
-      body: FutureBuilder<Map<String, dynamic>>(
-        future: ApiService.getPrediction(),
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
-            return const _PredictionLoadingState();
-          }
-
-          if (snapshot.hasError) {
-            return const _PredictionMessageState(
-              icon: Icons.show_chart_outlined,
-              title: "Tahmin verisi alınamadı",
-              subtitle: "Backend bağlantısını veya prediction endpoint'ini kontrol et.",
-            );
-          }
-
-          final data = snapshot.data ?? {};
-          final predictedExpense = (data["predicted_expense"] as num?)?.toDouble() ?? 0;
-          final confidence = (data["confidence"] as num?)?.toInt() ?? 0;
-          final message = data["message"]?.toString() ?? "Tahmin verisi alınamadı.";
-
-          final hasData = predictedExpense > 0 && confidence > 0;
-
-          return SafeArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.fromLTRB(20, 18, 20, 120),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    "AI\ntahminleri",
-                    style: theme.textTheme.headlineLarge,
-                  ),
-                  const SizedBox(height: 10),
-                  Text(
-                    "Geçmiş harcama trendine dayalı gelecek ay beklentileri.",
-                    style: theme.textTheme.bodyMedium,
-                  ),
-                  const SizedBox(height: 24),
-                  if (!hasData)
-                    const _PredictionMessageCard(
-                      title: "Henüz tahmin oluşturulamıyor",
-                      subtitle: "Tahmin modeli en az 1 ay gider verisi gerektirir. Lütfen farklı tarihlerde birkaç işlem ekle.",
-                    )
-                  else
-                    Column(
-                      children: [
-                        _PredictionHeroCard(
-                          predictedExpense: _formatMoney(predictedExpense),
-                          confidence: confidence,
-                          confidenceColor: _confidenceColor(confidence),
-                          confidenceLabel: _confidenceLabel(confidence),
-                        ),
-                        const SizedBox(height: 20),
-                        _PredictionInsightCard(
-                          message: message,
-                          accent: _confidenceColor(confidence),
-                        ),
-                        const SizedBox(height: 28),
-                        Text(
-                          "Tahmin kalitesi",
-                          style: theme.textTheme.headlineMedium,
-                        ),
-                        const SizedBox(height: 12),
-                        _ConfidenceBreakdownCard(
-                          confidence: confidence,
-                          color: _confidenceColor(confidence),
-                        ),
-                        const SizedBox(height: 28),
-                        Text(
-                          "Aksiyon önerileri",
-                          style: theme.textTheme.headlineMedium,
-                        ),
-                        const SizedBox(height: 12),
-                        _ActionTipCard(
-                          icon: Icons.trending_down_rounded,
-                          title: "Harcama kesintisi",
-                          subtitle: "Tahmin edilen tutarı %10 azaltmak için en yüksek kategoriyi %5 ve ikinci yüksek kategoriyi %10 azalt.",
-                          tone: const Color(0xFFF4E0D6),
-                          iconColor: const Color(0xFFC96B3B),
-                        ),
-                        const SizedBox(height: 12),
-                        _ActionTipCard(
-                          icon: Icons.savings_rounded,
-                          title: "Otomatik birikim",
-                          subtitle: "Aylık birikim planı oluştur. Harcama tahmini ile gelir farkını sabit olarak ayır.",
-                          tone: const Color(0xFFDDEEE7),
-                          iconColor: const Color(0xFF1E6B52),
-                        ),
-                        const SizedBox(height: 12),
-                        _ActionTipCard(
-                          icon: Icons.analytics_rounded,
-                          title: "Kategori analizi",
-                          subtitle: "En yüksek harcama kategorisindeki işlemleri analiz ekranında detaylı incele.",
-                          tone: const Color(0xFFF1EEE5),
-                          iconColor: const Color(0xFF7B887F),
-                        ),
-                      ],
-                    ),
-                ],
-              ),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
-class _PredictionHeroCard extends StatelessWidget {
-  final String predictedExpense;
-  final int confidence;
-  final Color confidenceColor;
-  final String confidenceLabel;
-
-  const _PredictionHeroCard({
-    required this.predictedExpense,
-    required this.confidence,
-    required this.confidenceColor,
-    required this.confidenceLabel,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(30),
-        gradient: LinearGradient(
-          colors: [
-            confidenceColor.withOpacity(0.95),
-            confidenceColor.withOpacity(0.85),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: confidenceColor.withOpacity(0.3),
-            blurRadius: 24,
-            offset: const Offset(0, 16),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            "Gelecek ay tahmini",
-            style: TextStyle(
-              color: Color(0xCCFFFFFF),
-              fontSize: 15,
-            ),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            predictedExpense,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 40,
-              fontWeight: FontWeight.w800,
-              height: 1,
-            ),
-          ),
-          const SizedBox(height: 20),
-          Row(
-            children: [
-              Expanded(
+      body: SafeArea(
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 120),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
-                      "Tahmin güveni",
-                      style: TextStyle(
-                        color: Color(0xCCFFFFFF),
-                        fontSize: 14,
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'AI Finans Koçu',
+                                style: Theme.of(context).textTheme.headlineLarge,
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Aylık veriyi analiz edip net kararlar öneririm.',
+                                style: Theme.of(context).textTheme.bodyMedium,
+                              ),
+                            ],
+                          ),
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEAF5F1),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: const Color(0xFFCADFD3)),
+                          ),
+                          child: const Row(
+                            children: [
+                              Icon(Icons.auto_awesome, color: Color(0xFF1E6B52), size: 16),
+                              SizedBox(width: 6),
+                              Text(
+                                'Canlı',
+                                style: TextStyle(
+                                  color: Color(0xFF1E6B52),
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 20),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(30),
+                        gradient: const LinearGradient(
+                          colors: [Color(0xFF17352A), Color(0xFF2B5E49), Color(0xFF477A67)],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF17352A).withOpacity(0.22),
+                            blurRadius: 28,
+                            offset: const Offset(0, 18),
+                          ),
+                        ],
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Son 30 günlük görünüm',
+                            style: TextStyle(color: Color(0xCCFFFFFF), fontSize: 14),
+                          ),
+                          const SizedBox(height: 12),
+                          Text(
+                            _formatMoney(netSaving),
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 36,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 14),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: _MiniStat(
+                                  label: 'Gelir',
+                                  value: _formatMoney(totalIncome),
+                                  color: const Color(0xFFBFE6D7),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: _MiniStat(
+                                  label: 'Gider',
+                                  value: _formatMoney(totalExpense),
+                                  color: const Color(0xFFF7D4BA),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 14),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.12),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.shield_outlined, color: Colors.white, size: 16),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'Risk seviyesi: $risk',
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontWeight: FontWeight.w700,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 8),
-                    Text(
-                      "$confidence%",
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.w700,
+                    const SizedBox(height: 24),
+                    Text('Hızlı sorular', style: Theme.of(context).textTheme.headlineMedium),
+                    const SizedBox(height: 12),
+                    Wrap(
+                      spacing: 10,
+                      runSpacing: 10,
+                      children: _quickPrompts.map((prompt) {
+                        return InkWell(
+                          borderRadius: BorderRadius.circular(999),
+                          onTap: () => _submitPrompt(prompt),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFFFCF6),
+                              borderRadius: BorderRadius.circular(999),
+                              border: Border.all(color: const Color(0xFFD8E0D8)),
+                            ),
+                            child: Text(
+                              prompt,
+                              style: const TextStyle(
+                                color: Color(0xFF1E2722),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                        );
+                      }).toList(),
+                    ),
+                    const SizedBox(height: 24),
+                    Text('Özet', style: Theme.of(context).textTheme.headlineMedium),
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(18),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFFCF6),
+                        borderRadius: BorderRadius.circular(24),
+                        border: Border.all(color: const Color(0xFFE9E0D4)),
+                      ),
+                      child: Text(
+                        (summary['summary'] ?? 'Veri analiz ediliyor...').toString(),
+                        style: const TextStyle(
+                          color: Color(0xFF55635D),
+                          fontSize: 15,
+                          height: 1.6,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text('En çok harcama', style: Theme.of(context).textTheme.headlineMedium),
+                    const SizedBox(height: 12),
+                    if (topCategories.isEmpty)
+                      const _EmptyStateCard(message: 'Henüz kategori verisi yok.')
+                    else
+                      ...topCategories.take(3).map((item) {
+                        final category = (item['category'] ?? 'Diğer').toString();
+                        final amount = (item['amount'] as num?)?.toDouble() ?? 0;
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFFFFCF6),
+                            borderRadius: BorderRadius.circular(20),
+                            border: Border.all(color: const Color(0xFFE7DED2)),
+                          ),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 42,
+                                height: 42,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFDDEEE7),
+                                  borderRadius: BorderRadius.circular(14),
+                                ),
+                                child: const Icon(Icons.pie_chart_rounded, color: Color(0xFF1E6B52)),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      category,
+                                      style: const TextStyle(
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF1E2722),
+                                      ),
+                                    ),
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      _formatMoney(amount),
+                                      style: const TextStyle(
+                                        color: Color(0xFF53625B),
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    const SizedBox(height: 24),
+                    Text('Öneriler', style: Theme.of(context).textTheme.headlineMedium),
+                    const SizedBox(height: 12),
+                    if (recommendations.isEmpty)
+                      const _EmptyStateCard(message: 'Öneri üretmek için daha fazla veri gerekiyor.')
+                    else
+                      ...recommendations.map((item) {
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(16),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFF7F3EB),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Container(
+                                width: 28,
+                                height: 28,
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFDDEEE7),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: const Icon(Icons.check, size: 18, color: Color(0xFF1E6B52)),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(
+                                  item,
+                                  style: const TextStyle(
+                                    color: Color(0xFF435248),
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }),
+                    const SizedBox(height: 24),
+                    Text('Koç sohbeti', style: Theme.of(context).textTheme.headlineMedium),
+                    const SizedBox(height: 12),
+                    Container(
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFFCF6),
+                        borderRadius: BorderRadius.circular(28),
+                        border: Border.all(color: const Color(0xFFE8E0D2)),
+                      ),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        itemCount: _messages.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 10),
+                        itemBuilder: (context, index) {
+                          final message = _messages[index];
+                          final isUser = message['role'] == 'user';
+                          return Align(
+                            alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+                            child: Container(
+                              constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                              decoration: BoxDecoration(
+                                color: isUser ? const Color(0xFF1E6B52) : const Color(0xFFF2F0EA),
+                                borderRadius: BorderRadius.circular(18),
+                              ),
+                              child: Text(
+                                message['text'] as String,
+                                style: TextStyle(
+                                  color: isUser ? Colors.white : const Color(0xFF1E2722),
+                                  height: 1.5,
+                                ),
+                              ),
+                            ),
+                          );
+                        },
                       ),
                     ),
                   ],
                 ),
               ),
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                decoration: BoxDecoration(
-                  color: const Color(0x2AFFFFFF),
-                  borderRadius: BorderRadius.circular(999),
-                  border: Border.all(color: const Color(0x33FFFFFF)),
-                ),
-                child: Text(
-                  confidenceLabel,
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.w700,
-                    fontSize: 15,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
       ),
-    );
-  }
-}
-
-class _PredictionInsightCard extends StatelessWidget {
-  final String message;
-  final Color accent;
-
-  const _PredictionInsightCard({
-    required this.message,
-    required this.accent,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFCF6),
-        borderRadius: BorderRadius.circular(26),
-        border: Border.all(color: const Color(0xFFE8E0D2)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
-            decoration: BoxDecoration(
-              color: accent.withOpacity(0.12),
-              borderRadius: BorderRadius.circular(999),
-            ),
-            child: Text(
-              "💡 AI İçgörü",
-              style: TextStyle(
-                color: accent,
-                fontWeight: FontWeight.w700,
-                fontSize: 13,
-              ),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Text(
-            message,
-            style: const TextStyle(
-              color: Color(0xFF55635D),
-              fontSize: 15,
-              height: 1.55,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ConfidenceBreakdownCard extends StatelessWidget {
-  final int confidence;
-  final Color color;
-
-  const _ConfidenceBreakdownCard({
-    required this.confidence,
-    required this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    String reason;
-    if (confidence >= 80) {
-      reason = "3+ ay veri ile oluşturulmuş yüksek kaliteli tahmin";
-    } else if (confidence >= 60) {
-      reason = "2-3 ay veri ile orta kalitede tahmin";
-    } else {
-      reason = "Tek ay veri ile düşük güvenirlilik. Daha fazla veri ekle.";
-    }
-
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFCF6),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE8E0D2)),
-      ),
-      child: Column(
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(999),
-            child: LinearProgressIndicator(
-              minHeight: 12,
-              value: confidence / 100,
-              backgroundColor: const Color(0xFFEFE9DD),
-              valueColor: AlwaysStoppedAnimation<Color>(color),
-            ),
-          ),
-          const SizedBox(height: 14),
-          Row(
+      bottomSheet: Container(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 16),
+        child: SafeArea(
+          child: Row(
             children: [
               Expanded(
-                child: Text(
-                  reason,
-                  style: const TextStyle(
-                    color: Color(0xFF64716B),
-                    fontSize: 14,
-                    height: 1.45,
+                child: TextField(
+                  controller: _controller,
+                  minLines: 1,
+                  maxLines: 4,
+                  decoration: InputDecoration(
+                    hintText: 'Koça soru sor...',
+                    filled: true,
+                    fillColor: const Color(0xFFFFFCF6),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      borderSide: const BorderSide(color: Color(0xFFD9DED7)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      borderSide: const BorderSide(color: Color(0xFFD9DED7)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(18),
+                      borderSide: const BorderSide(color: Color(0xFF1E6B52), width: 1.5),
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
                   ),
+                  onSubmitted: (_) => _submitPrompt(),
                 ),
+              ),
+              const SizedBox(width: 12),
+              AnimatedSwitcher(
+                duration: const Duration(milliseconds: 200),
+                child: _sending
+                    ? const SizedBox(
+                        key: ValueKey('loading'),
+                        width: 52,
+                        height: 52,
+                        child: Center(
+                          child: SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(strokeWidth: 2.5),
+                          ),
+                        ),
+                      )
+                    : FilledButton(
+                        key: const ValueKey('send'),
+                        onPressed: () => _submitPrompt(),
+                        style: FilledButton.styleFrom(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(18),
+                          ),
+                          minimumSize: const Size(52, 52),
+                          padding: EdgeInsets.zero,
+                        ),
+                        child: const Icon(Icons.send_rounded),
+                      ),
               ),
             ],
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _ActionTipCard extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final Color tone;
-  final Color iconColor;
-
-  const _ActionTipCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.tone,
-    required this.iconColor,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFCF6),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE8E0D2)),
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              CircleAvatar(
-                radius: 22,
-                backgroundColor: tone,
-                child: Icon(icon, color: iconColor),
-              ),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w700,
-                    color: Color(0xFF1E2722),
-                  ),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Text(
-            subtitle,
-            style: const TextStyle(
-              color: Color(0xFF64716B),
-              fontSize: 14,
-              height: 1.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PredictionMessageCard extends StatelessWidget {
-  final String title;
-  final String subtitle;
-
-  const _PredictionMessageCard({
-    required this.title,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(22),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFFCF6),
-        borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE7DED2)),
-      ),
-      child: Column(
-        children: [
-          const Icon(
-            Icons.auto_graph_rounded,
-            size: 40,
-            color: Color(0xFF7B887F),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF1E2722),
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            subtitle,
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-              color: Color(0xFF64716B),
-              height: 1.45,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _PredictionMessageState extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  const _PredictionMessageState({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return SafeArea(
-      child: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Container(
-            padding: const EdgeInsets.all(24),
-            decoration: BoxDecoration(
-              color: const Color(0xFFFFFCF6),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(color: const Color(0xFFE9DED4)),
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  icon,
-                  size: 42,
-                  color: const Color(0xFFC96B3B),
-                ),
-                const SizedBox(height: 14),
-                Text(
-                  title,
-                  style: const TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  subtitle,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(
-                    color: Color(0xFF5B6761),
-                    height: 1.45,
-                  ),
-                ),
-              ],
-            ),
           ),
         ),
       ),
@@ -520,13 +496,66 @@ class _PredictionMessageState extends StatelessWidget {
   }
 }
 
-class _PredictionLoadingState extends StatelessWidget {
-  const _PredictionLoadingState();
+class _MiniStat extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color color;
+
+  const _MiniStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
-    return const Center(
-      child: CircularProgressIndicator(),
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            label,
+            style: const TextStyle(color: Colors.white70, fontSize: 12),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EmptyStateCard extends StatelessWidget {
+  final String message;
+
+  const _EmptyStateCard({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFCF6),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: const Color(0xFFE7DED2)),
+      ),
+      child: Text(
+        message,
+        style: const TextStyle(color: Color(0xFF55635D)),
+      ),
     );
   }
 }

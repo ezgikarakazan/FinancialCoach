@@ -13,6 +13,7 @@ class PdfUpload(Base):
     file_hash = Column(String(64), nullable=False, index=True)
     statement_type = Column(String(20), nullable=False, default="bank", server_default="bank")
     institution_name = Column(String(120), nullable=False, default="Bilinmiyor", server_default="Bilinmiyor")
+    statement_date = Column(Date, nullable=True)
     uploaded_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     items = relationship(

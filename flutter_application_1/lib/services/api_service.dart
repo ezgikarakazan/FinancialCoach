@@ -257,6 +257,7 @@ class ApiService {
     required String fileName,
     String statementType = 'bank',
     String institutionName = '',
+    DateTime? statementDate,
   }) async {
     final request = http.MultipartRequest(
       "POST",
@@ -265,6 +266,9 @@ class ApiService {
     request.headers.addAll(_bearerOnlyHeader());
     request.fields['statement_type'] = statementType;
     request.fields['institution_name'] = institutionName;
+    if (statementDate != null) {
+      request.fields['statement_date'] = _dateOnly(statementDate);
+    }
 
     request.files.add(
       http.MultipartFile.fromBytes("file", bytes, filename: fileName),
@@ -278,6 +282,101 @@ class ApiService {
     }
 
     throw Exception("PDF yüklenemedi: ${_extractError(response)}");
+  }
+
+  static Future<Map<String, dynamic>> saveAccountBalance({
+    required String institutionName,
+    required double balance,
+    required DateTime balanceDate,
+    String? previousInstitutionName,
+    DateTime? previousBalanceDate,
+  }) async {
+    final payload = <String, dynamic>{
+      "institution_name": institutionName,
+      "balance": balance,
+      "balance_date": _dateOnly(balanceDate),
+    };
+    if (previousInstitutionName != null && previousBalanceDate != null) {
+      payload["previous_institution_name"] = previousInstitutionName;
+      payload["previous_balance_date"] = _dateOnly(previousBalanceDate);
+    }
+
+    final response = await http.post(
+      Uri.parse("$baseUrl/account-balances"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode(payload),
+    );
+
+    if (response.statusCode == 201) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<List<dynamic>> getAccountBalances() async {
+    final response = await http.get(
+      Uri.parse("$baseUrl/account-balances"),
+      headers: _currentAuthHeaders(),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<Map<String, dynamic>> saveCategoryBudget({
+    required String category,
+    required double monthlyLimit,
+    int warningPercent = 80,
+  }) async {
+    final response = await http.post(
+      Uri.parse("$baseUrl/category-budgets"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({
+        "category": category,
+        "monthly_limit": monthlyLimit,
+        "warning_percent": warningPercent,
+      }),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<List<dynamic>> getCategoryBudgets() async {
+    final response = await http.get(
+      Uri.parse("$baseUrl/category-budgets"),
+      headers: _currentAuthHeaders(),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<Map<String, dynamic>> saveFinancialGoal({
+    required String name,
+    required double targetAmount,
+  }) async {
+    final response = await http.post(
+      Uri.parse("$baseUrl/financial-goal"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({"name": name, "target_amount": targetAmount}),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception(_extractError(response));
   }
 
   static Future<Map<String, dynamic>> getAnalytics() async {
@@ -319,6 +418,38 @@ class ApiService {
     throw Exception("Dashboard alınamadı: ${response.statusCode}");
   }
 
+  static Future<Map<String, dynamic>> getAiCoachSummary({int days = 30}) async {
+    final response = await http.get(
+      Uri.parse(
+        "$baseUrl/ai/coach/summary",
+      ).replace(queryParameters: {"days": "$days"}),
+      headers: _currentAuthHeaders(),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception("AI koç özeti alınamadı: ${response.statusCode}");
+  }
+
+  static Future<Map<String, dynamic>> askAiCoach({
+    required String message,
+    int days = 30,
+  }) async {
+    final response = await http.post(
+      Uri.parse("$baseUrl/ai/coach/chat"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({"message": message, "lookback_days": days}),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception("AI koç yanıtı alınamadı: ${response.statusCode}");
+  }
+
   static Future<List<dynamic>> getPdfUploads() async {
     final response = await http.get(
       Uri.parse("$baseUrl/pdf-uploads"),
@@ -353,6 +484,7 @@ class ApiService {
     String? description,
     String? category,
     String? sourceType,
+    bool learnCategory = false,
   }) async {
     final response = await http.post(
       Uri.parse("$baseUrl/pdf-uploads/$uploadId/items/$itemId/decide"),
@@ -363,11 +495,55 @@ class ApiService {
         "description": ?description,
         "category": ?category,
         "source_type": ?sourceType,
+        "learn_category": learnCategory,
       }),
     );
 
     if (response.statusCode == 200) {
       return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<List<dynamic>> getMerchantCategoryRules() async {
+    final response = await http.get(
+      Uri.parse("$baseUrl/merchant-category-rules"),
+      headers: _currentAuthHeaders(),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as List<dynamic>;
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<Map<String, dynamic>> updateMerchantCategoryRule({
+    required int ruleId,
+    required String category,
+  }) async {
+    final response = await http.put(
+      Uri.parse("$baseUrl/merchant-category-rules/$ruleId"),
+      headers: _currentAuthHeaders(),
+      body: jsonEncode({"category": category}),
+    );
+
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body) as Map<String, dynamic>;
+    }
+
+    throw Exception(_extractError(response));
+  }
+
+  static Future<void> deleteMerchantCategoryRule(int ruleId) async {
+    final response = await http.delete(
+      Uri.parse("$baseUrl/merchant-category-rules/$ruleId"),
+      headers: _currentAuthHeaders(),
+    );
+
+    if (response.statusCode == 200 || response.statusCode == 204) {
+      return;
     }
 
     throw Exception(_extractError(response));

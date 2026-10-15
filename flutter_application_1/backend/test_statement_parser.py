@@ -31,3 +31,36 @@ def test_statement_parser_keeps_following_dated_row_separate():
     assert "Giden Transfer" not in transactions[0]["title"]
     assert transactions[1]["date"] == "2026-09-12"
     assert "Giden Transfer" in transactions[1]["title"]
+
+
+def test_statement_title_excludes_bank_page_footer():
+    transaction = main._build_transaction(
+        main.date(2026, 9, 9),
+        (
+            "Diğer, TAB GIDA POPEYES ISTANBUL TR - Sayfa 1/3 "
+            "Enpara Bank A.Ş Büyük Mükellefler V.D Seri / Sıra No / ENBK / "
+            "Ticaret sicil no 494129-5 | Mersis No 0335-0917-5890-0001"
+        ),
+        -300,
+    )
+
+    assert transaction["title"] == "Diğer, TAB GIDA POPEYES ISTANBUL TR"
+
+
+def test_statement_period_is_inferred_from_transaction_dates():
+    assert main._infer_statement_period(
+        [
+            {"date": "2026-09-03"},
+            {"date": "2026-09-18"},
+            {"date": "2026-09-30"},
+        ]
+    ) == "Eylül 2026"
+
+
+def test_statement_period_shows_month_range_when_transactions_span_months():
+    assert main._infer_statement_period(
+        [
+            {"date": "2026-08-28"},
+            {"date": "2026-09-03"},
+        ]
+    ) == "Ağustos-Eylül 2026"
